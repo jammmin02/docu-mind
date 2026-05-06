@@ -1,0 +1,62 @@
+services:
+
+  # ── PostgreSQL + pgvector ──────────────────────────────────────────────────
+  db:
+    image: pgvector/pgvector:pg16          
+    container_name: rag_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       ${DB_NAME}
+      POSTGRES_USER:     ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/db/init.sql:/docker-entrypoint-initdb.d/init.sql  
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── FastAPI 백엔드 ─────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: rag_backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_HOST: db                          # Docker 네트워크 내에서 서비스명으로 접근
+    volumes:
+      - ./backend:/app                     # 코드 변경 즉시 반영 (--reload)
+      - upload_data:/app/storage/uploads   # 업로드 파일 영구 보존
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy         # DB 완전히 뜬 후 백엔드 시작
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── React 프론트엔드 ───────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: rag_frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  postgres_data:   # DB 데이터 영구 보존
+  upload_data:     # 업로드 파일 영구 보존
