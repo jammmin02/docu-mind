@@ -1,5 +1,6 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Query
 from pydantic import BaseModel
+from typing import Optional
 from db.database import get_db
 from services.storage_service import storage_service
 from services.document_processor import process_document
@@ -9,14 +10,22 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 
 
 @router.get("")
-def list_documents():
-    """문서 목록 조회"""
+def list_documents(category_id: Optional[int] = Query(default=None)):
+    """문서 목록 조회 (category_id 필터 지원)"""
     with get_db() as (conn, cur):
-        cur.execute("""
-            SELECT id, filename, file_type, file_size, chunk_count, status, error_message, uploaded_at
-            FROM documents
-            ORDER BY uploaded_at DESC
-        """)
+        if category_id is not None:
+            cur.execute("""
+                SELECT id, filename, file_type, file_size, chunk_count, status, error_message, category_id, uploaded_at
+                FROM documents
+                WHERE category_id = %s
+                ORDER BY uploaded_at DESC
+            """, (category_id,))
+        else:
+            cur.execute("""
+                SELECT id, filename, file_type, file_size, chunk_count, status, error_message, category_id, uploaded_at
+                FROM documents
+                ORDER BY uploaded_at DESC
+            """)
         return cur.fetchall()
 
 
@@ -37,6 +46,7 @@ def get_document(doc_id: int):
 async def upload_document(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    category_id: Optional[int] = Form(default=None),
 ):
     """문서 업로드 — 파싱/청킹/임베딩은 백그라운드 처리"""
     ALLOWED_TYPES = {"pdf", "docx", "txt", "xlsx", "csv", "pptx"}
@@ -54,13 +64,22 @@ async def upload_document(
             "error": {"code": "FILE_TOO_LARGE", "message": "파일 크기는 10MB 이하여야 합니다", "status": 400}
         })
 
+    # category_id 유효성 검사
+    if category_id is not None:
+        with get_db() as (conn, cur):
+            cur.execute("SELECT id FROM categories WHERE id = %s", (category_id,))
+            if not cur.fetchone():
+                raise HTTPException(status_code=404, detail={
+                    "error": {"code": "CATEGORY_NOT_FOUND", "message": "카테고리를 찾을 수 없습니다", "status": 404}
+                })
+
     # DB에 processing 상태로 먼저 저장
     with get_db() as (conn, cur):
         cur.execute("""
-            INSERT INTO documents (filename, file_type, content, file_size, status)
-            VALUES (%s, %s, %s, %s, 'processing')
-            RETURNING id, filename, status
-        """, (file.filename, ext, "", len(contents)))
+            INSERT INTO documents (filename, file_type, content, file_size, status, category_id)
+            VALUES (%s, %s, %s, %s, 'processing', %s)
+            RETURNING id, filename, status, category_id
+        """, (file.filename, ext, "", len(contents), category_id))
         doc = cur.fetchone()
         doc_id = doc["id"]
 
@@ -77,7 +96,7 @@ async def upload_document(
     # 파싱 → 청킹 → 임베딩 → DB 저장 백그라운드 처리
     background_tasks.add_task(process_document, doc_id, contents, ext)
 
-    return {"id": doc_id, "filename": doc["filename"], "status": doc["status"]}
+    return {"id": doc_id, "filename": doc["filename"], "status": doc["status"], "category_id": doc["category_id"]}
 
 
 @router.delete("/{doc_id}")
