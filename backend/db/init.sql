@@ -11,6 +11,16 @@ CREATE TABLE IF NOT EXISTS users (
     last_login  TIMESTAMP
 );
 
+-- ── categories (RAG 지식 베이스 단위) ────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS categories (
+    id          SERIAL PRIMARY KEY,
+    name        TEXT NOT NULL UNIQUE,
+    description TEXT,
+    color       TEXT DEFAULT '#6366f1',  -- UI 표시용 hex 색상
+    created_at  TIMESTAMP DEFAULT NOW(),
+    updated_at  TIMESTAMP
+);
+
 -- ── documents (admin 지식 문서) ────────────────────────────────────────────
 -- doc_type: 'knowledge' = 관리자가 등록한 RAG 학습 문서
 CREATE TABLE IF NOT EXISTS documents (
@@ -25,6 +35,7 @@ CREATE TABLE IF NOT EXISTS documents (
     chunk_count     INTEGER,
     status          TEXT DEFAULT 'processing',  -- processing | ready | failed
     error_message   TEXT,
+    category_id     INTEGER REFERENCES categories(id) ON DELETE SET NULL,
     uploaded_at     TIMESTAMP DEFAULT NOW(),
     updated_at      TIMESTAMP
 );
@@ -101,3 +112,9 @@ CREATE INDEX IF NOT EXISTS idx_documents_status
 
 CREATE INDEX IF NOT EXISTS idx_documents_doc_type
     ON documents (doc_type);
+
+CREATE INDEX IF NOT EXISTS idx_documents_category_id
+    ON documents (category_id);
+
+CREATE INDEX IF NOT EXISTS idx_categories_name
+    ON categories (name);
