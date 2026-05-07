@@ -44,11 +44,17 @@ export function useReports() {
     setGenerating(true)
     setCurrentReport(null)
 
-    await startSSE(() => reportsApi.create({ documentId, reportType }))
+    try {
+      await startSSE(() => reportsApi.create({ documentId, reportType }))
+    } finally {
+      // done/error 이벤트로 이미 false가 됐을 수 있지만, 스트림이 비정상 종료된 경우 보장
+      setGenerating(false)
+    }
   }, [isGenerating, setGenerating, setCurrentReport, startSSE])
 
-  const downloadReport = useCallback((id, format = 'pdf') => {
-    window.open(reportsApi.downloadUrl(id, format), '_blank')
+  /** 다운로드 — 성공 시 브라우저 저장 다이얼로그, 실패 시 Error throw */
+  const downloadReport = useCallback(async (id, format = 'pdf') => {
+    await reportsApi.download(id, format)
   }, [])
 
   return {
