@@ -11,14 +11,16 @@ CREATE TABLE IF NOT EXISTS users (
     last_login  TIMESTAMP
 );
 
--- ── documents ─────────────────────────────────────────────────────────────
+-- ── documents (admin 지식 문서) ────────────────────────────────────────────
+-- doc_type: 'knowledge' = 관리자가 등록한 RAG 학습 문서
 CREATE TABLE IF NOT EXISTS documents (
     id              SERIAL PRIMARY KEY,
     filename        TEXT NOT NULL,
     file_type       TEXT NOT NULL,              -- pdf | docx | txt | xlsx | csv | pptx
-    content         TEXT NOT NULL,              -- 파싱된 전체 텍스트
+    doc_type        TEXT NOT NULL DEFAULT 'knowledge',  -- knowledge (향후 확장 가능)
+    content         TEXT NOT NULL DEFAULT '',   -- 파싱된 전체 텍스트
     file_path       TEXT,                       -- 원본 파일 저장 경로
-    storage_type    TEXT DEFAULT 'local',       -- local | s3
+    storage_type    TEXT DEFAULT 'local',
     file_size       INTEGER,
     chunk_count     INTEGER,
     status          TEXT DEFAULT 'processing',  -- processing | ready | failed
@@ -60,22 +62,34 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     created_at  TIMESTAMP DEFAULT NOW()
 );
 
+-- ── report_templates (사용자 업로드 양식) ─────────────────────────────────
+-- 사용자가 보고서 생성 시 업로드하는 양식 파일
+-- "이거 채워줘" / "이거랑 비슷한 양식 찾아줘"
+CREATE TABLE IF NOT EXISTS report_templates (
+    id          SERIAL PRIMARY KEY,
+    filename    TEXT NOT NULL,
+    file_type   TEXT NOT NULL,
+    file_path   TEXT NOT NULL,
+    content     TEXT NOT NULL DEFAULT '',       -- 파싱된 텍스트 (양식 구조 파악용)
+    created_at  TIMESTAMP DEFAULT NOW()
+);
+
 -- ── reports ───────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS reports (
-    id           SERIAL PRIMARY KEY,
-    document_ids JSONB NOT NULL,                -- [1, 2, 3]
-    report_type  TEXT NOT NULL,                 -- summary | analysis | minutes
-    content      TEXT NOT NULL DEFAULT '',
-    file_path    TEXT,                          -- 변환된 PDF/DOCX 경로
-    status       TEXT DEFAULT 'generating',     -- generating | done | failed
-    error_message TEXT,
-    created_at   TIMESTAMP DEFAULT NOW()
+    id              SERIAL PRIMARY KEY,
+    document_ids    JSONB NOT NULL,             -- [1, 2, 3]  지식 문서 ID 목록
+    template_id     INTEGER REFERENCES report_templates(id),  -- 양식 ID (선택)
+    report_type     TEXT NOT NULL,              -- summary | analysis | minutes | template_fill
+    content         TEXT NOT NULL DEFAULT '',
+    file_path       TEXT,
+    status          TEXT DEFAULT 'generating',  -- generating | done | failed
+    error_message   TEXT,
+    created_at      TIMESTAMP DEFAULT NOW()
 );
 
 -- ── 인덱스 ────────────────────────────────────────────────────────────────
-CREATE INDEX IF NOT EXISTS idx_chunks_embedding
-    ON chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
-
+-- 주의: ivfflat은 데이터가 어느 정도 쌓인 후 생성 권장
+-- 개발 초기에는 hnsw 또는 기본 인덱스 없이 시작 가능
 CREATE INDEX IF NOT EXISTS idx_chunks_document_id
     ON chunks (document_id);
 
@@ -84,3 +98,6 @@ CREATE INDEX IF NOT EXISTS idx_chat_messages_session
 
 CREATE INDEX IF NOT EXISTS idx_documents_status
     ON documents (status);
+
+CREATE INDEX IF NOT EXISTS idx_documents_doc_type
+    ON documents (doc_type);
