@@ -2,9 +2,10 @@ import { API_BASE } from '../utils/constants'
 import api from './client'
 
 export const documentsApi = {
-  /** 문서 목록 */
-  list() {
-    return api.get('/documents')
+  /** 문서 목록 (category_id 필터 옵션) */
+  list(categoryId) {
+    const params = categoryId != null ? `?category_id=${categoryId}` : ''
+    return api.get(`/documents${params}`)
   },
 
   /** 문서 상세 */
@@ -12,10 +13,11 @@ export const documentsApi = {
     return api.get(`/documents/${id}`)
   },
 
-  /** 파일 업로드 */
-  async upload(file, onProgress) {
+  /** 파일 업로드 (categoryId 옵션) */
+  async upload(file, onProgress, categoryId) {
     const formData = new FormData()
     formData.append('file', file)
+    if (categoryId != null) formData.append('category_id', categoryId)
 
     const xhr = new XMLHttpRequest()
     return new Promise((resolve, reject) => {

@@ -1,6 +1,6 @@
 import { DocumentCard } from './DocumentCard'
 
-export function DocumentList({ documents, onDelete, onReprocess }) {
+export function DocumentList({ documents, categories = [], onDelete, onReprocess }) {
   if (!documents.length) {
     return (
       <div className="text-center py-16 text-slate-400">
@@ -17,6 +17,7 @@ export function DocumentList({ documents, onDelete, onReprocess }) {
         <DocumentCard
           key={doc.id}
           doc={doc}
+          categories={categories}
           onDelete={onDelete}
           onReprocess={onReprocess}
         />

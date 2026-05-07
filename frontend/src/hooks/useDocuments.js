@@ -14,7 +14,7 @@ import { DOCUMENT_STATUS, POLL_INTERVALS, MAX_FILE_SIZE_MB } from '../utils/cons
  *   - 연속 3회 네트워크 오류 → status='failed'로 변경
  *   - 언마운트 시 모든 타이머 정리
  */
-export function useDocuments() {
+export function useDocuments(categoryId = null) {
   const {
     documents, isUploading, uploadProgress,
     setDocuments, addDocument, updateDocument, removeDocument,
@@ -24,10 +24,10 @@ export function useDocuments() {
   // { [docId]: { timer: TimeoutId | null, startTime: number, errorCount: number } }
   const pollState = useRef({})
 
-  // ── 최초 목록 로드 ──────────────────────────────────────────────────────────
+  // ── 최초 목록 로드 (categoryId 변경 시 재로드) ──────────────────────────────
   useEffect(() => {
-    documentsApi.list().then(setDocuments).catch(console.error)
-  }, [setDocuments])
+    documentsApi.list(categoryId).then(setDocuments).catch(console.error)
+  }, [setDocuments, categoryId])
 
   // ── 언마운트 시 모든 타이머 정리 ────────────────────────────────────────────
   useEffect(() => {
@@ -123,7 +123,7 @@ export function useDocuments() {
   }, [documents, startPolling])
 
   // ── 업로드 ─────────────────────────────────────────────────────────────────
-  const upload = useCallback(async (file) => {
+  const upload = useCallback(async (file, uploadCategoryId) => {
     if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
       throw new Error(`파일 크기는 ${MAX_FILE_SIZE_MB}MB 이하여야 합니다.`)
     }
@@ -133,7 +133,7 @@ export function useDocuments() {
     setUploadProgress(tempId, 0)
 
     try {
-      const doc = await documentsApi.upload(file, (pct) => setUploadProgress(tempId, pct))
+      const doc = await documentsApi.upload(file, (pct) => setUploadProgress(tempId, pct), uploadCategoryId)
       addDocument(doc)
       if (doc.status === DOCUMENT_STATUS.PROCESSING) startPolling(doc.id)
       return doc

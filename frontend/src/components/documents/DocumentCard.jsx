@@ -29,9 +29,10 @@ const EXT_COLOR = {
 /** 에러/타임아웃 상태에서만 메시지 표시 */
 const SHOW_ERROR_STATUS = new Set(['failed', 'timeout'])
 
-export function DocumentCard({ doc, onDelete, onReprocess }) {
+export function DocumentCard({ doc, onDelete, onReprocess, categories = [] }) {
   const ext = fileExtension(doc.filename)
   const [errorExpanded, setErrorExpanded] = useState(false)
+  const category = categories.find((c) => c.id === doc.category_id) ?? null
 
   const isProcessing = doc.status === 'processing'
   const hasError     = SHOW_ERROR_STATUS.has(doc.status) && doc.error_message
@@ -70,6 +71,15 @@ export function DocumentCard({ doc, onDelete, onReprocess }) {
             <span className="text-xs text-slate-400">{formatFileSize(doc.file_size)}</span>
           )}
           <span className="text-xs text-slate-400">{formatRelativeTime(doc.uploaded_at)}</span>
+          {category && (
+            <span
+              className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full font-medium"
+              style={{ backgroundColor: `${category.color}18`, color: category.color }}
+            >
+              <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: category.color }} />
+              {category.name}
+            </span>
+          )}
         </div>
 
         {/* 처리 중 안내 */}

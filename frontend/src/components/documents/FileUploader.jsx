@@ -8,7 +8,7 @@ import { ACCEPTED_FILE_TYPES, MAX_FILE_SIZE_MB } from '../../utils/constants'
  * @param {boolean}  isUploading   - 업로드 진행 중 여부
  * @param {Object}   uploadProgress - { [tempId]: 0~100 }
  */
-export function FileUploader({ onUpload, isUploading, uploadProgress = {} }) {
+export function FileUploader({ onUpload, isUploading, uploadProgress = {}, categoryName }) {
   const inputRef = useRef(null)
   const [dragging, setDragging] = useState(false)
 
@@ -56,6 +56,16 @@ export function FileUploader({ onUpload, isUploading, uploadProgress = {} }) {
         <p className="text-xs text-slate-400 mt-1">
           {ACCEPTED_FILE_TYPES.join(', ')} · 최대 {MAX_FILE_SIZE_MB}MB
         </p>
+        {!isUploading && categoryName && (
+          <p className="text-xs text-primary-500 mt-1.5 font-medium">
+            📁 {categoryName} 카테고리에 업로드됩니다
+          </p>
+        )}
+        {!isUploading && !categoryName && (
+          <p className="text-xs text-slate-400 mt-1.5">
+            카테고리를 선택하면 해당 카테고리로 분류됩니다
+          </p>
+        )}
 
         <input
           ref={inputRef}
