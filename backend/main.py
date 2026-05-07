@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
 from db.database import check_db_connection
-from routers import documents, chat, report, auth
+from routers import documents, chat, report, auth, categories
 
 load_dotenv()
 
@@ -24,6 +24,7 @@ app.add_middleware(
 
 # ── 라우터 등록 ───────────────────────────────────────────────────────────────
 app.include_router(auth.router)
+app.include_router(categories.router)
 app.include_router(documents.router)
 app.include_router(chat.router)
 app.include_router(report.router)
