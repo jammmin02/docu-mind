@@ -11,8 +11,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 \
     libpango-1.0-0 \
     libpangoft2-1.0-0 \
+    libpangocairo-1.0-0 \
     libcairo2 \
     libffi-dev \
+    libgdk-pixbuf-2.0-0 \
+    shared-mime-info \
+    fonts-nanum \
     && rm -rf /var/lib/apt/lists/*
 
 # 파이썬 패키지 설치 (코드보다 먼저 복사 → 레이어 캐시 활용)
