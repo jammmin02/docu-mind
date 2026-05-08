@@ -52,8 +52,9 @@ def _friendly_error(e: Exception) -> str:
     if "청킹 결과가 없습니다" in str(e):
         return "문서에서 텍스트를 추출할 수 없습니다. 빈 파일이거나 이미지 기반 PDF일 수 있습니다."
 
-    # 그 외 예외: 원본 메시지 300자 이내
-    return str(e)[:300]
+    # 그 외 예외: 내부 오류 상세는 서버 로그에만 기록, 사용자에게는 일반 메시지 반환
+    logger.error("[processor] unhandled error type=%s msg=%s", type(e).__name__, e, exc_info=True)
+    return "파일 처리 중 예상치 못한 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
 
 
 # ── 메인 파이프라인 ───────────────────────────────────────────────────────────

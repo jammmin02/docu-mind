@@ -1,36 +1,56 @@
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Query
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, BackgroundTasks, Query
 from pydantic import BaseModel
 from typing import Optional
 from db.database import get_db
 from services.storage_service import storage_service
 from services.document_processor import process_document
 from services.retriever import search_chunks, format_context
+from dependencies import get_current_user, require_admin
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
+# ── 파일 시그니처(매직 바이트) 검증 ──────────────────────────────────────────
+# PDF: %PDF  /  Office Open XML(docx·xlsx·pptx): PK ZIP 헤더
+_MAGIC: dict[str, bytes] = {
+    "pdf":  b"%PDF",
+    "docx": b"PK\x03\x04",
+    "xlsx": b"PK\x03\x04",
+    "pptx": b"PK\x03\x04",
+    # txt / csv: 텍스트 파일은 바이너리 시그니처 없음 → 별도 검사 불필요
+}
+
+def _check_magic(contents: bytes, ext: str) -> bool:
+    """확장자에 해당하는 매직 바이트로 실제 파일 형식을 검증한다."""
+    sig = _MAGIC.get(ext)
+    if sig is None:
+        return True          # txt / csv → 검사 생략
+    return contents[:len(sig)] == sig
+
 
 @router.get("")
-def list_documents(category_id: Optional[int] = Query(default=None)):
-    """문서 목록 조회 (category_id 필터 지원)"""
+def list_documents(category_id: Optional[int] = Query(default=None), _: dict = Depends(require_admin)):
+    """
+    문서 목록 조회 (category_id 필터 지원).
+    categories LEFT JOIN으로 category_name, category_color를 한 번에 반환.
+    """
     with get_db() as (conn, cur):
+        base_sql = """
+            SELECT d.id, d.filename, d.file_type, d.file_size, d.chunk_count,
+                   d.status, d.error_message, d.category_id, d.uploaded_at,
+                   c.name  AS category_name,
+                   c.color AS category_color
+            FROM documents d
+            LEFT JOIN categories c ON c.id = d.category_id
+        """
         if category_id is not None:
-            cur.execute("""
-                SELECT id, filename, file_type, file_size, chunk_count, status, error_message, category_id, uploaded_at
-                FROM documents
-                WHERE category_id = %s
-                ORDER BY uploaded_at DESC
-            """, (category_id,))
+            cur.execute(base_sql + "WHERE d.category_id = %s ORDER BY d.uploaded_at DESC", (category_id,))
         else:
-            cur.execute("""
-                SELECT id, filename, file_type, file_size, chunk_count, status, error_message, category_id, uploaded_at
-                FROM documents
-                ORDER BY uploaded_at DESC
-            """)
+            cur.execute(base_sql + "ORDER BY d.uploaded_at DESC")
         return cur.fetchall()
 
 
 @router.get("/{doc_id}")
-def get_document(doc_id: int):
+def get_document(doc_id: int, _: dict = Depends(require_admin)):
     """문서 상세 조회"""
     with get_db() as (conn, cur):
         cur.execute("SELECT * FROM documents WHERE id = %s", (doc_id,))
@@ -47,6 +67,7 @@ async def upload_document(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     category_id: Optional[int] = Form(default=None),
+    _: dict = Depends(require_admin),
 ):
     """문서 업로드 — 파싱/청킹/임베딩은 백그라운드 처리"""
     ALLOWED_TYPES = {"pdf", "docx", "txt", "xlsx", "csv", "pptx"}
@@ -62,6 +83,12 @@ async def upload_document(
     if len(contents) > MAX_SIZE:
         raise HTTPException(status_code=400, detail={
             "error": {"code": "FILE_TOO_LARGE", "message": "파일 크기는 10MB 이하여야 합니다", "status": 400}
+        })
+
+    # 파일 시그니처(매직 바이트) 검증 — 확장자 위조 차단
+    if not _check_magic(contents, ext):
+        raise HTTPException(status_code=400, detail={
+            "error": {"code": "INVALID_FILE_CONTENT", "message": "파일 내용이 확장자와 일치하지 않습니다", "status": 400}
         })
 
     # category_id 유효성 검사
@@ -100,7 +127,7 @@ async def upload_document(
 
 
 @router.delete("/{doc_id}")
-def delete_document(doc_id: int):
+def delete_document(doc_id: int, _: dict = Depends(require_admin)):
     """문서 삭제"""
     with get_db() as (conn, cur):
         cur.execute("SELECT id, file_path FROM documents WHERE id = %s", (doc_id,))
@@ -118,7 +145,7 @@ def delete_document(doc_id: int):
 
 
 @router.post("/{doc_id}/reprocess")
-def reprocess_document(doc_id: int, background_tasks: BackgroundTasks):
+def reprocess_document(doc_id: int, background_tasks: BackgroundTasks, _: dict = Depends(require_admin)):
     """실패 문서 재처리"""
     with get_db() as (conn, cur):
         cur.execute("SELECT id, status, file_path, file_type FROM documents WHERE id = %s", (doc_id,))
@@ -165,7 +192,7 @@ class SearchRequest(BaseModel):
 
 
 @router.post("/search")
-def search_documents(req: SearchRequest):
+def search_documents(req: SearchRequest, _: dict = Depends(get_current_user)):
     """
     자연어 쿼리로 벡터 유사도 검색.
     반환: 관련 청크 목록 + LLM 컨텍스트 문자열
