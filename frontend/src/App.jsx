@@ -6,6 +6,8 @@ import LoginPage from './pages/LoginPage'
 import DocumentsPage from './pages/DocumentsPage'
 import ChatPage from './pages/ChatPage'
 import ReportsPage from './pages/ReportsPage'
+import CompanyInfoPage from './pages/CompanyInfoPage'
+import TemplatesPage from './pages/TemplatesPage'
 
 /** 로그인 후 역할에 따라 기본 페이지 분기 */
 function RootRedirect() {
@@ -28,6 +30,25 @@ export default function App() {
           element={
             <AdminRoute>
               <DocumentsPage />
+            </AdminRoute>
+          }
+        />
+
+        {/* admin 전용 */}
+        <Route
+          path="/company"
+          element={
+            <AdminRoute>
+              <CompanyInfoPage />
+            </AdminRoute>
+          }
+        />
+
+        <Route
+          path="/templates"
+          element={
+            <AdminRoute>
+              <TemplatesPage />
             </AdminRoute>
           }
         />

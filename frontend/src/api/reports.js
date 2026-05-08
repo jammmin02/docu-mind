@@ -10,7 +10,10 @@ export const reportsApi = {
     return api.get(`/reports/${id}`)
   },
 
-  create({ documentId, reportType }) {
+  create({ documentId, reportType, templateId }) {
+    const body = { document_ids: [documentId] }
+    if (templateId) body.template_id = templateId
+    if (reportType) body.report_type = reportType
     return fetch(`${API_BASE}/reports`, {
       method:      'POST',
       credentials: 'include',
@@ -18,7 +21,7 @@ export const reportsApi = {
         'Content-Type': 'application/json',
         'Accept':        'text/event-stream',
       },
-      body: JSON.stringify({ document_ids: [documentId], report_type: reportType }),
+      body: JSON.stringify(body),
     })
   },
 
