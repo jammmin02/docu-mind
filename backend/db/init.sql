@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS chunks (
 CREATE TABLE IF NOT EXISTS chat_sessions (
     id                   SERIAL PRIMARY KEY,
     session_id           TEXT UNIQUE NOT NULL,
+    user_id              INTEGER REFERENCES users(id) ON DELETE CASCADE,
     title                TEXT,
     total_messages       INTEGER DEFAULT 0,
     last_message_preview TEXT,
@@ -85,12 +86,43 @@ CREATE TABLE IF NOT EXISTS report_templates (
     created_at  TIMESTAMP DEFAULT NOW()
 );
 
+-- ── company_info (보고서 생성 공통 컨텍스트) ──────────────────────────────
+-- singleton 패턴: id=1 고정 행을 UPSERT로 관리
+CREATE TABLE IF NOT EXISTS company_info (
+    id                  INTEGER PRIMARY KEY DEFAULT 1,
+    company_name        TEXT,
+    description         TEXT,                          -- 회사 소개
+    business_fields     JSONB DEFAULT '[]',            -- 사업 분야 (배열)
+    main_services       JSONB DEFAULT '[]',            -- 주요 서비스 (배열)
+    vision_goals        TEXT,                          -- 비전 및 목표
+    default_report_info TEXT,                          -- 기본 보고서 참고 정보
+    report_tone         TEXT,                          -- 보고서 작성 톤/스타일
+    chat_tone           TEXT,                          -- 채팅 응답 톤/스타일
+    updated_at          TIMESTAMP DEFAULT NOW(),
+    CONSTRAINT company_info_singleton CHECK (id = 1)
+);
+
+INSERT INTO company_info (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+
+-- ── report_structures (관리자 정의 섹션 기반 템플릿) ──────────────────────────
+CREATE TABLE IF NOT EXISTS report_structures (
+    id          SERIAL PRIMARY KEY,
+    name        TEXT NOT NULL,
+    description TEXT,
+    sections    JSONB NOT NULL DEFAULT '[]',    -- [{title,description,required_input,placeholder}]
+    is_active   BOOLEAN DEFAULT TRUE,
+    created_at  TIMESTAMP DEFAULT NOW(),
+    updated_at  TIMESTAMP
+);
+
 -- ── reports ───────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS reports (
     id              SERIAL PRIMARY KEY,
+    user_id         INTEGER REFERENCES users(id) ON DELETE SET NULL,
     document_ids    JSONB NOT NULL,             -- [1, 2, 3]  지식 문서 ID 목록
-    template_id     INTEGER REFERENCES report_templates(id),  -- 양식 ID (선택)
-    report_type     TEXT NOT NULL,              -- summary | analysis | minutes | template_fill
+    template_id     INTEGER REFERENCES report_templates(id),  -- 파일 양식 ID (선택)
+    structure_id    INTEGER REFERENCES report_structures(id) ON DELETE SET NULL,
+    report_type     TEXT NOT NULL DEFAULT 'custom',
     content         TEXT NOT NULL DEFAULT '',
     file_path       TEXT,
     status          TEXT DEFAULT 'generating',  -- generating | done | failed
@@ -118,3 +150,9 @@ CREATE INDEX IF NOT EXISTS idx_documents_category_id
 
 CREATE INDEX IF NOT EXISTS idx_categories_name
     ON categories (name);
+
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_user_id
+    ON chat_sessions (user_id);
+
+CREATE INDEX IF NOT EXISTS idx_reports_user_id
+    ON reports (user_id);
