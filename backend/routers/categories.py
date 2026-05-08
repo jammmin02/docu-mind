@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional
 from db.database import get_db
+from dependencies import get_current_user, require_admin
 
 router = APIRouter(prefix="/categories", tags=["categories"])
 
@@ -23,8 +24,8 @@ class CategoryUpdate(BaseModel):
 # ── 엔드포인트 ────────────────────────────────────────────────────────────────
 
 @router.get("")
-def list_categories():
-    """카테고리 목록 — 문서 수 포함"""
+def list_categories(_: dict = Depends(get_current_user)):
+    """카테고리 목록 — 문서 수 포함 (로그인 필요)"""
     with get_db() as (conn, cur):
         cur.execute("""
             SELECT
@@ -39,8 +40,8 @@ def list_categories():
 
 
 @router.get("/{category_id}")
-def get_category(category_id: int):
-    """카테고리 상세"""
+def get_category(category_id: int, _: dict = Depends(get_current_user)):
+    """카테고리 상세 (로그인 필요)"""
     with get_db() as (conn, cur):
         cur.execute("""
             SELECT
@@ -60,10 +61,9 @@ def get_category(category_id: int):
 
 
 @router.post("", status_code=201)
-def create_category(body: CategoryCreate):
-    """카테고리 생성"""
+def create_category(body: CategoryCreate, _: dict = Depends(require_admin)):
+    """카테고리 생성 (관리자 전용)"""
     with get_db() as (conn, cur):
-        # 중복 이름 체크
         cur.execute("SELECT id FROM categories WHERE name = %s", (body.name,))
         if cur.fetchone():
             raise HTTPException(status_code=409, detail={
@@ -79,8 +79,11 @@ def create_category(body: CategoryCreate):
 
 
 @router.patch("/{category_id}")
-def update_category(category_id: int, body: CategoryUpdate):
-    """카테고리 수정 (이름 / 설명 / 색상)"""
+def update_category(category_id: int, body: CategoryUpdate, _: dict = Depends(require_admin)):
+    """카테고리 수정 (관리자 전용)"""
+    # 허용된 컬럼명 화이트리스트 — 동적 SQL 필드는 반드시 이 집합에서만 사용
+    ALLOWED_FIELDS = frozenset({"name", "description", "color"})
+
     with get_db() as (conn, cur):
         cur.execute("SELECT id, name FROM categories WHERE id = %s", (category_id,))
         cat = cur.fetchone()
@@ -89,7 +92,6 @@ def update_category(category_id: int, body: CategoryUpdate):
                 "error": {"code": "CATEGORY_NOT_FOUND", "message": "카테고리를 찾을 수 없습니다", "status": 404}
             })
 
-        # 이름 변경 시 중복 체크
         if body.name and body.name != cat["name"]:
             cur.execute("SELECT id FROM categories WHERE name = %s", (body.name,))
             if cur.fetchone():
@@ -97,29 +99,31 @@ def update_category(category_id: int, body: CategoryUpdate):
                     "error": {"code": "DUPLICATE_NAME", "message": f"'{body.name}' 카테고리가 이미 존재합니다", "status": 409}
                 })
 
-        fields, values = [], []
-        if body.name is not None:
-            fields.append("name = %s"); values.append(body.name)
-        if body.description is not None:
-            fields.append("description = %s"); values.append(body.description)
-        if body.color is not None:
-            fields.append("color = %s"); values.append(body.color)
+        # (컬럼명, 값) 쌍 목록 — 컬럼명은 ALLOWED_FIELDS 에서만 선택
+        col_val: list[tuple[str, object]] = []
+        if body.name        is not None: col_val.append(("name",        body.name))
+        if body.description is not None: col_val.append(("description", body.description))
+        if body.color       is not None: col_val.append(("color",       body.color))
 
-        if not fields:
-            return cat  # 변경 사항 없음
+        # 방어적 화이트리스트 검증
+        for col, _ in col_val:
+            assert col in ALLOWED_FIELDS, f"허용되지 않은 컬럼: {col}"
 
-        fields.append("updated_at = NOW()")
-        values.append(category_id)
+        if not col_val:
+            return cat
+
+        set_clause = ", ".join(f"{col} = %s" for col, _ in col_val) + ", updated_at = NOW()"
+        values     = [v for _, v in col_val] + [category_id]
         cur.execute(
-            f"UPDATE categories SET {', '.join(fields)} WHERE id = %s RETURNING id, name, description, color, created_at, updated_at",
+            f"UPDATE categories SET {set_clause} WHERE id = %s RETURNING id, name, description, color, created_at, updated_at",
             values,
         )
         return cur.fetchone()
 
 
 @router.delete("/{category_id}")
-def delete_category(category_id: int):
-    """카테고리 삭제 — 소속 문서의 category_id는 NULL로 변경 (ON DELETE SET NULL)"""
+def delete_category(category_id: int, _: dict = Depends(require_admin)):
+    """카테고리 삭제 (관리자 전용) — 소속 문서의 category_id는 NULL로 변경"""
     with get_db() as (conn, cur):
         cur.execute("SELECT id, name FROM categories WHERE id = %s", (category_id,))
         cat = cur.fetchone()
@@ -128,7 +132,6 @@ def delete_category(category_id: int):
                 "error": {"code": "CATEGORY_NOT_FOUND", "message": "카테고리를 찾을 수 없습니다", "status": 404}
             })
 
-        # 소속 문서 수 확인 (안내용)
         cur.execute("SELECT COUNT(*) AS cnt FROM documents WHERE category_id = %s", (category_id,))
         doc_count = cur.fetchone()["cnt"]
 
