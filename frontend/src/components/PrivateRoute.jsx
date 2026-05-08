@@ -11,7 +11,11 @@ function Loading() {
   )
 }
 
-/** 로그인 여부만 확인 */
+/**
+ * 로그인 여부 확인 — UX 목적의 라우트 가드.
+ * 실질적인 인증/인가는 백엔드 API에서 처리되며,
+ * 세션 만료 시 api/client.js의 401 인터셉터가 /login으로 자동 이동시킨다.
+ */
 export function PrivateRoute({ children }) {
   const { user, loading } = useAuth()
   if (loading) return <Loading />
@@ -19,7 +23,11 @@ export function PrivateRoute({ children }) {
   return children
 }
 
-/** 로그인 + admin 역할 확인 — 일반 user는 /chat으로 리다이렉트 */
+/**
+ * 로그인 + admin 역할 확인 — UX 목적의 라우트 가드.
+ * 일반 user가 접근 시 /chat으로 리다이렉트.
+ * 실질적인 관리자 권한 검증은 백엔드 API에서 처리된다.
+ */
 export function AdminRoute({ children }) {
   const { user, loading } = useAuth()
   if (loading) return <Loading />
