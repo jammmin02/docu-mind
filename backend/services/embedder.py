@@ -1,5 +1,5 @@
 """
-OpenAI text-embedding-3-small 임베딩 서비스
+OpenAI text-embedding-3-large 임베딩 서비스
 지수 백오프 재시도 + 배치 처리 + per-request timeout
 """
 import os
@@ -30,6 +30,8 @@ client = OpenAI(
 
 BATCH_SIZE   = int(os.getenv("EMBEDDING_BATCH_SIZE",  100))
 MAX_RETRIES  = int(os.getenv("EMBEDDING_MAX_RETRIES",   3))
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-large")
+EMBEDDING_DIMENSIONS = int(os.getenv("EMBEDDING_DIMENSIONS", 1536))
 RETRY_DELAYS = [3, 10, 30]  # 초: 1차 → 2차 → 3차 (이전보다 조금 더 여유 있게)
 
 
@@ -43,8 +45,9 @@ def embed_with_retry(texts: List[str]) -> List[List[float]]:
     for attempt in range(MAX_RETRIES):
         try:
             response = client.embeddings.create(
-                model="text-embedding-3-small",
+                model=EMBEDDING_MODEL,
                 input=texts,
+                dimensions=EMBEDDING_DIMENSIONS,
             )
             return [item.embedding for item in response.data]
 

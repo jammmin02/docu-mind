@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS chunks (
     document_id      INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
     content          TEXT NOT NULL,
     context_summary  TEXT,                      -- 문맥 강화 RAG용 (Phase 3)
-    embedding        vector(1536),              -- OpenAI text-embedding-3-small
+    embedding        vector(1536),              -- OpenAI text-embedding-3-large with dimensions=1536
     chunk_index      INTEGER NOT NULL,
     token_count      INTEGER,
     created_at       TIMESTAMP DEFAULT NOW()
