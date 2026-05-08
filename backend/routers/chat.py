@@ -6,13 +6,15 @@ import json
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from db.database import get_db
 from services.retriever import search_chunks, format_context
 from services.llm import stream_chat
+from dependencies import get_current_user
+from limiter import limiter
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -32,10 +34,42 @@ def sse(payload: dict) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
+# ── 세션 소유권 확인 헬퍼 ─────────────────────────────────────────────────────
+
+def _assert_session_owner(session_id: str, user_id: int, is_admin: bool) -> dict:
+    """
+    세션이 존재하는지, 현재 사용자가 접근 가능한지 확인.
+    - 관리자는 모든 세션 접근 가능
+    - 일반 사용자는 자신의 세션(user_id 일치) 또는 레거시 세션(user_id IS NULL)만 접근 가능
+    """
+    with get_db() as (conn, cur):
+        cur.execute(
+            "SELECT session_id, user_id FROM chat_sessions WHERE session_id = %s",
+            (session_id,)
+        )
+        session = cur.fetchone()
+
+    if not session:
+        raise HTTPException(status_code=404, detail={
+            "error": {"code": "SESSION_NOT_FOUND", "message": "세션을 찾을 수 없습니다", "status": 404}
+        })
+
+    # 관리자는 통과, 일반 사용자는 소유권 확인
+    if not is_admin:
+        owner_id = session["user_id"]
+        if owner_id is not None and owner_id != user_id:
+            raise HTTPException(status_code=403, detail={
+                "error": {"code": "FORBIDDEN", "message": "해당 세션에 접근할 권한이 없습니다", "status": 403}
+            })
+
+    return dict(session)
+
+
 # ── 메인 채팅 엔드포인트 ──────────────────────────────────────────────────────
 
 @router.post("")
-async def chat(req: ChatRequest):
+@limiter.limit("30/minute")   # IP당 분당 30회 — LLM 비용 및 서버 부하 제한
+async def chat(request: Request, req: ChatRequest, current_user: dict = Depends(get_current_user)):
     """
     질문 전송 → SSE 스트리밍 응답
 
@@ -50,17 +84,31 @@ async def chat(req: ChatRequest):
             "error": {"code": "EMPTY_QUERY", "message": "질문을 입력해주세요", "status": 400}
         })
 
+    user_id  = current_user["id"]
+    is_admin = current_user["role"] == "admin"
+
     # ── 1. 세션 초기화 / 사용자 메시지 저장 ───────────────────────────────────
     with get_db() as (conn, cur):
         cur.execute(
-            "SELECT session_id FROM chat_sessions WHERE session_id = %s",
+            "SELECT session_id, user_id FROM chat_sessions WHERE session_id = %s",
             (req.session_id,)
         )
-        if not cur.fetchone():
+        existing = cur.fetchone()
+
+        if not existing:
+            # 신규 세션: user_id 포함하여 생성
             cur.execute("""
-                INSERT INTO chat_sessions (session_id, title, updated_at)
-                VALUES (%s, %s, NOW())
-            """, (req.session_id, req.query[:30]))
+                INSERT INTO chat_sessions (session_id, user_id, title, updated_at)
+                VALUES (%s, %s, %s, NOW())
+            """, (req.session_id, user_id, req.query[:30]))
+        else:
+            # 기존 세션 소유권 확인 (관리자 제외)
+            if not is_admin:
+                owner_id = existing["user_id"]
+                if owner_id is not None and owner_id != user_id:
+                    raise HTTPException(status_code=403, detail={
+                        "error": {"code": "FORBIDDEN", "message": "해당 세션에 접근할 권한이 없습니다", "status": 403}
+                    })
 
         cur.execute("""
             INSERT INTO chat_messages (session_id, role, content)
@@ -111,11 +159,9 @@ async def chat(req: ChatRequest):
         full_reply = []
 
         try:
-            # 출처 먼저 전송
             if sources:
                 yield sse({"type": "sources", "sources": sources})
 
-            # Claude 스트리밍
             async for token in stream_chat(
                 query=req.query,
                 context=context,
@@ -125,8 +171,8 @@ async def chat(req: ChatRequest):
                 yield sse({"type": "token", "content": token})
 
         except Exception as e:
-            logger.error(f"[chat] streaming error: {e}")
-            yield sse({"type": "error", "message": str(e)[:200]})
+            logger.error("[chat] streaming error: %s", e, exc_info=True)
+            yield sse({"type": "error", "message": "응답 생성 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."})
 
         finally:
             # ── 5. 어시스턴트 메시지 저장 ─────────────────────────────────────
@@ -157,7 +203,7 @@ async def chat(req: ChatRequest):
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",      # nginx 버퍼링 비활성화
+            "X-Accel-Buffering": "no",
         },
     )
 
@@ -165,29 +211,39 @@ async def chat(req: ChatRequest):
 # ── 세션 관리 ─────────────────────────────────────────────────────────────────
 
 @router.get("/sessions")
-def list_sessions():
-    """세션 목록"""
+def list_sessions(current_user: dict = Depends(get_current_user)):
+    """세션 목록 — 관리자는 전체, 일반 사용자는 자신의 세션만"""
+    user_id  = current_user["id"]
+    is_admin = current_user["role"] == "admin"
+
     with get_db() as (conn, cur):
-        cur.execute("""
-            SELECT session_id, title, total_messages, last_message_preview, updated_at
-            FROM chat_sessions
-            ORDER BY updated_at DESC
-        """)
+        if is_admin:
+            cur.execute("""
+                SELECT session_id, title, total_messages, last_message_preview, updated_at
+                FROM chat_sessions
+                ORDER BY updated_at DESC
+            """)
+        else:
+            # 자신의 세션 + 레거시(user_id IS NULL) 세션
+            cur.execute("""
+                SELECT session_id, title, total_messages, last_message_preview, updated_at
+                FROM chat_sessions
+                WHERE user_id = %s OR user_id IS NULL
+                ORDER BY updated_at DESC
+            """, (user_id,))
         return cur.fetchall()
 
 
 @router.get("/sessions/{session_id}")
-def get_session(session_id: str, limit: int = 50, offset: int = 0):
-    """세션 메시지 조회"""
+def get_session(session_id: str, limit: int = 50, offset: int = 0,
+                current_user: dict = Depends(get_current_user)):
+    """세션 메시지 조회 (소유권 검증)"""
+    user_id  = current_user["id"]
+    is_admin = current_user["role"] == "admin"
+
+    _assert_session_owner(session_id, user_id, is_admin)
+
     with get_db() as (conn, cur):
-        cur.execute(
-            "SELECT session_id FROM chat_sessions WHERE session_id = %s",
-            (session_id,)
-        )
-        if not cur.fetchone():
-            raise HTTPException(status_code=404, detail={
-                "error": {"code": "SESSION_NOT_FOUND", "message": "세션을 찾을 수 없습니다", "status": 404}
-            })
         cur.execute("""
             SELECT role, content, sources, created_at
             FROM chat_messages
@@ -199,8 +255,13 @@ def get_session(session_id: str, limit: int = 50, offset: int = 0):
 
 
 @router.delete("/sessions/{session_id}")
-def delete_session(session_id: str):
-    """세션 삭제"""
+def delete_session(session_id: str, current_user: dict = Depends(get_current_user)):
+    """세션 삭제 (소유권 검증)"""
+    user_id  = current_user["id"]
+    is_admin = current_user["role"] == "admin"
+
+    _assert_session_owner(session_id, user_id, is_admin)
+
     with get_db() as (conn, cur):
         cur.execute(
             "DELETE FROM chat_sessions WHERE session_id = %s",
