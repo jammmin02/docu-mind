@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { documentsApi } from '../api/documents'
 import useDocumentStore from '../store/documentStore'
 import { DOCUMENT_STATUS, POLL_INTERVALS, MAX_FILE_SIZE_MB } from '../utils/constants'
@@ -21,12 +21,17 @@ export function useDocuments(categoryId = null) {
     setUploading, setUploadProgress, clearUploadProgress,
   } = useDocumentStore()
 
+  const [loadError, setLoadError] = useState(null)
+
   // { [docId]: { timer: TimeoutId | null, startTime: number, errorCount: number } }
   const pollState = useRef({})
 
   // ── 최초 목록 로드 (categoryId 변경 시 재로드) ──────────────────────────────
   useEffect(() => {
-    documentsApi.list(categoryId).then(setDocuments).catch(console.error)
+    setLoadError(null)
+    documentsApi.list(categoryId)
+      .then(setDocuments)
+      .catch((e) => setLoadError(e.message ?? '문서 목록을 불러오지 못했습니다'))
   }, [setDocuments, categoryId])
 
   // ── 언마운트 시 모든 타이머 정리 ────────────────────────────────────────────
@@ -157,7 +162,7 @@ export function useDocuments(categoryId = null) {
     startPolling(id)
   }, [updateDocument, startPolling])
 
-  return { documents, isUploading, uploadProgress, upload, deleteDocument, reprocess }
+  return { documents, isUploading, uploadProgress, loadError, upload, deleteDocument, reprocess }
 }
 
 /** 경과 시간(ms)에 따른 적응형 폴링 간격 */
