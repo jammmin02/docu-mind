@@ -8,6 +8,8 @@
   4. GET /auth/me              → JWT 검증 → 사용자 정보 반환
 """
 
+import os
+
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import JSONResponse, RedirectResponse
 from jose import JWTError
@@ -90,10 +92,10 @@ async def google_callback(code: str | None = None, error: str | None = None):
     response.set_cookie(
         key=COOKIE_NAME,
         value=jwt_token,
-        httponly=True,      # JS에서 접근 불가 (XSS 방어)
-        samesite="lax",     # CSRF 기본 방어
-        secure=False,       # 로컬 개발용 (운영은 True + HTTPS)
-        max_age=60 * 60 * 8,  # 8시간
+        httponly=True,                                  # JS에서 접근 불가 (XSS 방어)
+        samesite="lax",                                 # CSRF 기본 방어
+        secure=os.getenv("ENV", "development") == "production",  # 운영 환경에서만 HTTPS 강제
+        max_age=60 * 60 * 8,                            # 8시간
         path="/",
     )
     return response
