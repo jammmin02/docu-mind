@@ -26,3 +26,6 @@ backend/logs/
 # OS
 .DS_Store
 Thumbs.db
+
+# dataset
+dataset/
