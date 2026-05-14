@@ -106,9 +106,11 @@ def upsert_user(email: str, name: str) -> dict:
             VALUES (%s, %s, %s)
             ON CONFLICT (email) DO UPDATE
               SET name       = EXCLUDED.name,
+                  role       = EXCLUDED.role,
                   last_login = NOW()
             RETURNING id, email, name, role
             """,
+            # [Fix 3] role도 갱신 — ADMIN_EMAILS 변경 후 재로그인 시 반영되도록
             (email, name, role),
         )
         return dict(cur.fetchone())
