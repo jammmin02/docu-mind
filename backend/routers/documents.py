@@ -4,7 +4,13 @@ from typing import Optional
 from pathlib import Path
 from db.database import get_db
 from services.storage_service import storage_service
-from services.document_processor import process_document
+from services.document_processor import (
+    process_document,
+    reparse_document,
+    rechunk_document,
+    reembed_document,
+)
+from services.chunker import ChunkConfig
 from services.retriever import search_chunks, format_context
 from dependencies import get_current_user, require_admin
 
@@ -236,6 +242,120 @@ def reprocess_document(doc_id: int, background_tasks: BackgroundTasks, _: dict =
     background_tasks.add_task(process_document, doc_id, contents, doc["file_type"])
 
     return {"message": "재처리가 시작되었습니다", "document_id": doc_id}
+
+
+# ── 세분화 재처리 ─────────────────────────────────────────────────────────────
+
+def _require_doc_with_file(doc_id: int, cur) -> dict:
+    """공통: 문서 존재 + 파일 경로 확인. 없으면 HTTPException."""
+    cur.execute("SELECT id, status, file_path, file_type FROM documents WHERE id = %s", (doc_id,))
+    doc = cur.fetchone()
+    if not doc:
+        raise HTTPException(status_code=404, detail={
+            "error": {"code": "DOCUMENT_NOT_FOUND", "message": "해당 문서를 찾을 수 없습니다", "status": 404}
+        })
+    return doc
+
+
+@router.post("/{doc_id}/reparse")
+def reparse_document_route(doc_id: int, background_tasks: BackgroundTasks, _: dict = Depends(require_admin)):
+    """
+    파싱 단계만 재실행 → parsed_pages 갱신, chunks 변경 없음.
+    모든 상태에서 실행 가능 (단, 처리 중 상태는 제외).
+    """
+    with get_db() as (conn, cur):
+        doc = _require_doc_with_file(doc_id, cur)
+        if doc["status"] in ("processing", "reparsing", "rechunking", "reembedding"):
+            raise HTTPException(status_code=409, detail={
+                "error": {"code": "INVALID_STATUS", "message": "현재 처리 중인 문서입니다. 완료 후 재시도해 주세요.", "status": 409}
+            })
+        if not doc["file_path"]:
+            raise HTTPException(status_code=409, detail={
+                "error": {"code": "FILE_NOT_FOUND", "message": "저장된 파일을 찾을 수 없습니다", "status": 409}
+            })
+
+    from pathlib import Path
+    file_path = Path(doc["file_path"])
+    if not file_path.exists():
+        raise HTTPException(status_code=409, detail={
+            "error": {"code": "FILE_NOT_FOUND", "message": "스토리지에 파일이 존재하지 않습니다", "status": 409}
+        })
+    contents = file_path.read_bytes()
+    background_tasks.add_task(reparse_document, doc_id, contents, doc["file_type"])
+    return {"message": "재파싱이 시작되었습니다", "document_id": doc_id}
+
+
+class RechunkRequest(BaseModel):
+    max_chunk_chars: Optional[int] = None
+    overlap_chars:   Optional[int] = None
+    min_chunk_len:   Optional[int] = None
+
+
+@router.post("/{doc_id}/rechunk")
+def rechunk_document_route(
+    doc_id: int,
+    body: RechunkRequest,
+    background_tasks: BackgroundTasks,
+    _: dict = Depends(require_admin),
+):
+    """
+    parsed_pages 기반 청킹+임베딩 재실행.
+    body에 파라미터가 있으면 해당 값 사용, 없으면 카테고리 설정값 사용.
+    """
+    with get_db() as (conn, cur):
+        doc = _require_doc_with_file(doc_id, cur)
+        if doc["status"] in ("processing", "reparsing", "rechunking", "reembedding"):
+            raise HTTPException(status_code=409, detail={
+                "error": {"code": "INVALID_STATUS", "message": "현재 처리 중인 문서입니다.", "status": 409}
+            })
+
+    # body에 파라미터가 하나라도 있으면 ChunkConfig 구성
+    cfg_dict = {k: v for k, v in body.dict().items() if v is not None}
+    chunk_config = ChunkConfig.from_dict(cfg_dict) if cfg_dict else None
+
+    background_tasks.add_task(rechunk_document, doc_id, chunk_config)
+    return {"message": "재청킹이 시작되었습니다", "document_id": doc_id}
+
+
+@router.post("/{doc_id}/reembed")
+def reembed_document_route(doc_id: int, background_tasks: BackgroundTasks, _: dict = Depends(require_admin)):
+    """기존 chunks content를 그대로 사용해 임베딩만 재생성."""
+    with get_db() as (conn, cur):
+        doc = _require_doc_with_file(doc_id, cur)
+        if doc["status"] in ("processing", "reparsing", "rechunking", "reembedding"):
+            raise HTTPException(status_code=409, detail={
+                "error": {"code": "INVALID_STATUS", "message": "현재 처리 중인 문서입니다.", "status": 409}
+            })
+
+    background_tasks.add_task(reembed_document, doc_id)
+    return {"message": "재임베딩이 시작되었습니다", "document_id": doc_id}
+
+
+@router.get("/{doc_id}/parsed_pages")
+def get_parsed_pages(doc_id: int, _: dict = Depends(require_admin)):
+    """
+    문서의 페이지별 파싱 결과 목록 반환 (parsed_pages 테이블).
+    content는 첫 500자만 포함하고 total_chars를 함께 반환합니다.
+    """
+    with get_db() as (conn, cur):
+        cur.execute("SELECT id FROM documents WHERE id = %s", (doc_id,))
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail={
+                "error": {"code": "DOCUMENT_NOT_FOUND", "message": "해당 문서를 찾을 수 없습니다", "status": 404}
+            })
+        cur.execute("""
+            SELECT
+                page_number,
+                LEFT(content, 500) AS content_preview,
+                char_count,
+                has_table,
+                ocr_applied
+            FROM parsed_pages
+            WHERE document_id = %s
+            ORDER BY page_number
+        """, (doc_id,))
+        rows = cur.fetchall()
+    return {"document_id": doc_id, "pages": rows, "total_pages": len(rows)}
 
 
 # ── 데이터셋 일괄 Import ──────────────────────────────────────────────────────

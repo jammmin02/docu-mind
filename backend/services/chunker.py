@@ -15,14 +15,33 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional
 
 from services.parser import PageResult
 
-# ── 청크 크기 파라미터 ─────────────────────────────────────────────────────────
+# ── 전역 기본 청크 파라미터 ────────────────────────────────────────────────────
 MAX_CHUNK_CHARS = 800   # 청크 하나의 최대 문자 수
 OVERLAP_CHARS   = 80    # sliding window fallback 시 overlap
 MIN_CHUNK_LEN   = 30    # 이보다 짧으면 이전 청크에 병합
+
+
+@dataclass
+class ChunkConfig:
+    """카테고리별 청킹 파라미터 (없으면 전역 기본값 사용)"""
+    max_chunk_chars: int = MAX_CHUNK_CHARS
+    overlap_chars:   int = OVERLAP_CHARS
+    min_chunk_len:   int = MIN_CHUNK_LEN
+
+    @classmethod
+    def from_dict(cls, d: Optional[dict]) -> "ChunkConfig":
+        """categories.chunk_config JSONB dict → ChunkConfig 변환. None이면 기본값."""
+        if not d:
+            return cls()
+        return cls(
+            max_chunk_chars=int(d.get("max_chunk_chars", MAX_CHUNK_CHARS)),
+            overlap_chars=int(d.get("overlap_chars",   OVERLAP_CHARS)),
+            min_chunk_len=int(d.get("min_chunk_len",   MIN_CHUNK_LEN)),
+        )
 
 # 표 블록 감지 패턴 (Markdown table: | 로 시작하는 줄들의 연속)
 _TABLE_PATTERN = re.compile(r'(\|.+\|(?:\n\|.+\|)*)', re.MULTILINE)
@@ -53,11 +72,19 @@ class ChunkResult:
 
 # ── 공개 API ──────────────────────────────────────────────────────────────────
 
-def chunk_pages(pages: list[PageResult]) -> list[ChunkResult]:
+def chunk_pages(
+    pages: list[PageResult],
+    chunk_config: Optional[ChunkConfig] = None,
+) -> list[ChunkResult]:
     """
     PageResult 리스트 → ChunkResult 리스트.
     각 페이지를 독립적으로 hierarchical 청킹하고, 청크에 해당 페이지의 metadata를 붙인다.
+
+    Args:
+        pages: parse_file()이 반환한 PageResult 리스트
+        chunk_config: 청킹 파라미터 (None이면 전역 기본값)
     """
+    cfg = chunk_config or ChunkConfig()
     all_chunks: list[ChunkResult] = []
 
     for page in pages:
@@ -65,7 +92,7 @@ def chunk_pages(pages: list[PageResult]) -> list[ChunkResult]:
         if not text:
             continue
 
-        page_chunks = _chunk_page_text(text)
+        page_chunks = _chunk_page_text(text, cfg)
 
         for content in page_chunks:
             if not content.strip():
@@ -75,7 +102,7 @@ def chunk_pages(pages: list[PageResult]) -> list[ChunkResult]:
                 metadata=dict(page.metadata),
             ))
 
-    return _merge_short_chunks(all_chunks)
+    return _merge_short_chunks(all_chunks, cfg)
 
 
 def estimate_tokens(text: str) -> int:
@@ -85,7 +112,7 @@ def estimate_tokens(text: str) -> int:
 
 # ── 핵심 청킹 로직 ─────────────────────────────────────────────────────────────
 
-def _chunk_page_text(text: str) -> list[str]:
+def _chunk_page_text(text: str, cfg: ChunkConfig) -> list[str]:
     """
     단일 페이지 텍스트를 hierarchical하게 청크 리스트로 분할.
 
@@ -122,7 +149,7 @@ def _chunk_page_text(text: str) -> list[str]:
     # ── 3~4단계: 각 섹션을 단락 → 문장 → sliding window로 분할 ────────────────
     result_chunks: list[str] = []
     for section in sections:
-        chunks = _split_section(section)
+        chunks = _split_section(section, cfg)
         result_chunks.extend(chunks)
 
     # ── 5단계: placeholder를 실제 내용(표/코드)으로 복원 ─────────────────────
@@ -174,11 +201,11 @@ def _split_by_sections(text: str) -> list[str]:
     return sections if sections else [text]
 
 
-def _split_section(text: str) -> list[str]:
+def _split_section(text: str, cfg: ChunkConfig) -> list[str]:
     """
     섹션 텍스트를 단락 → 문장 → sliding window 순서로 청크 분할.
     """
-    if len(text) <= MAX_CHUNK_CHARS:
+    if len(text) <= cfg.max_chunk_chars:
         return [text]
 
     # 단락 분리
@@ -190,20 +217,19 @@ def _split_section(text: str) -> list[str]:
     buffer = ""
 
     for para in paragraphs:
-        # 단락 자체가 MAX_CHUNK_CHARS 초과 → 문장 단위로 재분할
-        if len(para) > MAX_CHUNK_CHARS:
+        # 단락 자체가 max_chunk_chars 초과 → 문장 단위로 재분할
+        if len(para) > cfg.max_chunk_chars:
             if buffer:
                 chunks.append(buffer)
                 buffer = ""
-            chunks.extend(_split_by_sentences(para))
+            chunks.extend(_split_by_sentences(para, cfg))
             continue
 
-        # buffer + 현재 단락이 MAX_CHUNK_CHARS 이하 → 합산
+        # buffer + 현재 단락이 max_chunk_chars 이하 → 합산
         candidate = (buffer + "\n\n" + para).strip() if buffer else para
-        if len(candidate) <= MAX_CHUNK_CHARS:
+        if len(candidate) <= cfg.max_chunk_chars:
             buffer = candidate
         else:
-            # buffer를 확정하고 새 buffer 시작
             if buffer:
                 chunks.append(buffer)
             buffer = para
@@ -214,31 +240,30 @@ def _split_section(text: str) -> list[str]:
     return chunks if chunks else [text]
 
 
-def _split_by_sentences(text: str) -> list[str]:
+def _split_by_sentences(text: str, cfg: ChunkConfig) -> list[str]:
     """
     문장 경계(. ? ! 등)로 분할.
     그래도 긴 문장은 sliding window fallback.
     """
-    # 한국어/영어 문장 경계
     sentences = re.split(r'(?<=[.!?。])\s+', text)
     sentences = [s.strip() for s in sentences if s.strip()]
 
     if not sentences:
-        return _sliding_window(text)
+        return _sliding_window(text, cfg)
 
     chunks: list[str] = []
     buffer = ""
 
     for sentence in sentences:
-        if len(sentence) > MAX_CHUNK_CHARS:
+        if len(sentence) > cfg.max_chunk_chars:
             if buffer:
                 chunks.append(buffer)
                 buffer = ""
-            chunks.extend(_sliding_window(sentence))
+            chunks.extend(_sliding_window(sentence, cfg))
             continue
 
         candidate = (buffer + " " + sentence).strip() if buffer else sentence
-        if len(candidate) <= MAX_CHUNK_CHARS:
+        if len(candidate) <= cfg.max_chunk_chars:
             buffer = candidate
         else:
             if buffer:
@@ -248,27 +273,27 @@ def _split_by_sentences(text: str) -> list[str]:
     if buffer:
         chunks.append(buffer)
 
-    return chunks if chunks else _sliding_window(text)
+    return chunks if chunks else _sliding_window(text, cfg)
 
 
-def _sliding_window(text: str) -> list[str]:
+def _sliding_window(text: str, cfg: ChunkConfig) -> list[str]:
     """마지막 fallback: 순수 슬라이딩 윈도우"""
     chunks: list[str] = []
     start = 0
     while start < len(text):
-        end   = min(start + MAX_CHUNK_CHARS, len(text))
+        end   = min(start + cfg.max_chunk_chars, len(text))
         chunk = text[start:end].strip()
         if chunk:
             chunks.append(chunk)
         if end == len(text):
             break
-        start = end - OVERLAP_CHARS
+        start = end - cfg.overlap_chars
     return chunks
 
 
-def _merge_short_chunks(chunks: list[ChunkResult]) -> list[ChunkResult]:
+def _merge_short_chunks(chunks: list[ChunkResult], cfg: ChunkConfig) -> list[ChunkResult]:
     """
-    MIN_CHUNK_LEN 미만의 짧은 청크를 이전 청크에 병합.
+    min_chunk_len 미만의 짧은 청크를 이전 청크에 병합.
     단, 표 청크(has_table=True)는 병합 대상에서 제외.
     """
     if not chunks:
@@ -276,7 +301,7 @@ def _merge_short_chunks(chunks: list[ChunkResult]) -> list[ChunkResult]:
 
     merged: list[ChunkResult] = []
     for chunk in chunks:
-        is_short = len(chunk.content) < MIN_CHUNK_LEN
+        is_short = len(chunk.content) < cfg.min_chunk_len
         is_table = chunk.metadata.get("has_table", False)
 
         if is_short and not is_table and merged:
