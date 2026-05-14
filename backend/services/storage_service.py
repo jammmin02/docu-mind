@@ -24,9 +24,14 @@ class StorageService:
         if path.exists():
             path.unlink()
 
-        parent = path.parent
-        if parent.exists() and not any(parent.iterdir()):
-            parent.rmdir()
+        # import-dataset으로 가져온 파일은 dataset/ 폴더를 가리키므로
+        # 같은 폴더에 다른 파일이 있으면 rmdir()가 OSError를 냄 → 무시
+        try:
+            parent = path.parent
+            if parent.exists() and not any(parent.iterdir()):
+                parent.rmdir()
+        except OSError:
+            pass
 
     def save_template(self, filename: str, contents: bytes) -> str:
         """보고서 양식 파일 저장 — storage/templates/ 하위"""

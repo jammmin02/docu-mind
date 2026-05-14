@@ -1,11 +1,28 @@
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, BackgroundTasks, Query
 from pydantic import BaseModel
 from typing import Optional
+from pathlib import Path
 from db.database import get_db
 from services.storage_service import storage_service
 from services.document_processor import process_document
 from services.retriever import search_chunks, format_context
 from dependencies import get_current_user, require_admin
+
+DATASET_ROOT  = Path(__file__).parent.parent / "dataset"
+ALLOWED_EXTS  = {"pdf", "docx", "txt", "xlsx", "csv", "pptx"}
+
+CATEGORY_DISPLAY_NAMES: dict[str, str] = {
+    "policy":  "정책/규제",
+    "finance": "금융/경제",
+    "company": "기업 정보",
+    "YMC":     "YMC",
+}
+CATEGORY_COLORS: dict[str, str] = {
+    "policy":  "#3b82f6",
+    "finance": "#10b981",
+    "company": "#f59e0b",
+    "YMC":     "#8b5cf6",
+}
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -71,7 +88,7 @@ async def upload_document(
 ):
     """문서 업로드 — 파싱/청킹/임베딩은 백그라운드 처리"""
     ALLOWED_TYPES = {"pdf", "docx", "txt", "xlsx", "csv", "pptx"}
-    MAX_SIZE = 10 * 1024 * 1024  # 10MB
+    MAX_SIZE = 50 * 1024 * 1024  # 50MB (보고서 특성상 대용량 PDF 허용)
 
     ext = file.filename.rsplit(".", 1)[-1].lower()
     if ext not in ALLOWED_TYPES:
@@ -82,7 +99,7 @@ async def upload_document(
     contents = await file.read()
     if len(contents) > MAX_SIZE:
         raise HTTPException(status_code=400, detail={
-            "error": {"code": "FILE_TOO_LARGE", "message": "파일 크기는 10MB 이하여야 합니다", "status": 400}
+            "error": {"code": "FILE_TOO_LARGE", "message": "파일 크기는 50MB 이하여야 합니다", "status": 400}
         })
 
     # 파일 시그니처(매직 바이트) 검증 — 확장자 위조 차단
@@ -139,9 +156,48 @@ def delete_document(doc_id: int, _: dict = Depends(require_admin)):
         cur.execute("DELETE FROM documents WHERE id = %s", (doc_id,))
 
     # DB 삭제 후 스토리지 파일 정리
+    # import-dataset 파일은 dataset/ 경로를 가리키므로 파일 삭제 실패해도 500 내지 않음
     if doc["file_path"]:
-        storage_service.delete(doc["file_path"])
+        try:
+            storage_service.delete(doc["file_path"])
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(
+                "[document] 파일 삭제 실패 (DB 레코드는 삭제됨): %s", e
+            )
     return {"message": "문서가 삭제되었습니다"}
+
+
+@router.post("/reprocess-all")
+def reprocess_all_documents(background_tasks: BackgroundTasks, _: dict = Depends(require_admin)):
+    """모든 문서의 청크를 삭제하고 전체 재처리 (청킹/임베딩 재실행)"""
+    with get_db() as (conn, cur):
+        # 청크 전체 삭제
+        cur.execute("DELETE FROM chunks")
+        # 모든 문서를 processing 상태로 초기화
+        cur.execute("""
+            UPDATE documents
+            SET status = 'processing', chunk_count = 0, error_message = NULL, updated_at = NOW()
+            WHERE file_path IS NOT NULL
+            RETURNING id, file_path, file_type
+        """)
+        docs = cur.fetchall()
+
+    queued, errors = [], []
+    for doc in docs:
+        file_path = Path(doc["file_path"])
+        if not file_path.exists():
+            errors.append({"document_id": doc["id"], "error": "파일 없음"})
+            continue
+        contents = file_path.read_bytes()
+        background_tasks.add_task(process_document, doc["id"], contents, doc["file_type"])
+        queued.append(doc["id"])
+
+    return {
+        "message": f"{len(queued)}개 문서 재처리 시작, {len(errors)}개 실패",
+        "queued": queued,
+        "errors": errors,
+    }
 
 
 @router.post("/{doc_id}/reprocess")
@@ -182,36 +238,108 @@ def reprocess_document(doc_id: int, background_tasks: BackgroundTasks, _: dict =
     return {"message": "재처리가 시작되었습니다", "document_id": doc_id}
 
 
-# ── 검색 ──────────────────────────────────────────────────────────────────────
+# ── 데이터셋 일괄 Import ──────────────────────────────────────────────────────
 
-class SearchRequest(BaseModel):
-    query: str
-    top_k: int = 5
-    score_cutoff: float = 0.3
-    document_ids: list[int] | None = None
+def _get_or_create_category(cur, folder_name: str) -> int:
+    display_name = CATEGORY_DISPLAY_NAMES.get(folder_name, folder_name)
+    cur.execute("SELECT id FROM categories WHERE name = %s", (display_name,))
+    row = cur.fetchone()
+    if row:
+        return row["id"]
+    color = CATEGORY_COLORS.get(folder_name, "#6366f1")
+    cur.execute(
+        "INSERT INTO categories (name, description, color) VALUES (%s, %s, %s) RETURNING id",
+        (display_name, f"{display_name} 관련 문서", color),
+    )
+    return cur.fetchone()["id"]
 
 
-@router.post("/search")
-def search_documents(req: SearchRequest, _: dict = Depends(get_current_user)):
+def _import_single(file_path: Path, category_id: int, background_tasks: BackgroundTasks) -> str:
+    """파일 하나를 DB에 등록하고 백그라운드 처리 예약. 이미 있으면 'skipped' 반환."""
+    filename = file_path.name
+    ext      = file_path.suffix.lstrip(".").lower()
+
+    with get_db() as (conn, cur):
+        cur.execute(
+            "SELECT id FROM documents WHERE filename = %s AND category_id = %s",
+            (filename, category_id),
+        )
+        if cur.fetchone():
+            return "skipped"
+
+        contents = file_path.read_bytes()
+        cur.execute(
+            """
+            INSERT INTO documents (filename, file_type, content, file_size, status, category_id, file_path)
+            VALUES (%s, %s, %s, %s, 'processing', %s, %s)
+            RETURNING id
+            """,
+            (filename, ext, "", len(contents), category_id, str(file_path)),
+        )
+        doc_id = cur.fetchone()["id"]
+
+    background_tasks.add_task(process_document, doc_id, contents, ext)
+    return "queued"
+
+
+@router.post("/import-dataset")
+def import_dataset(
+    background_tasks: BackgroundTasks,
+    force: bool = Query(default=False, description="이미 등록된 파일도 재처리"),
+    category: Optional[str] = Query(default=None, description="특정 카테고리 폴더명만 처리"),
+    _: dict = Depends(require_admin),
+):
     """
-    자연어 쿼리로 벡터 유사도 검색.
-    반환: 관련 청크 목록 + LLM 컨텍스트 문자열
+    dataset/ 폴더를 스캔하여 미등록 파일을 일괄 import.
+
+    - 폴더명을 카테고리로 자동 매핑 (없으면 신규 생성)
+    - 이미 등록된 파일은 skip (force=true 시 재처리)
+    - 처리(파싱/청킹/임베딩)는 백그라운드로 실행
     """
-    if not req.query.strip():
-        raise HTTPException(status_code=400, detail={
-            "error": {"code": "EMPTY_QUERY", "message": "검색어를 입력해주세요", "status": 400}
+    if not DATASET_ROOT.exists():
+        raise HTTPException(status_code=500, detail={
+            "error": {"code": "DATASET_NOT_FOUND", "message": "dataset 폴더를 찾을 수 없습니다", "status": 500}
         })
 
-    chunks = search_chunks(
-        query=req.query,
-        top_k=req.top_k,
-        score_cutoff=req.score_cutoff,
-        document_ids=req.document_ids,
-    )
+    folders = sorted([d for d in DATASET_ROOT.iterdir() if d.is_dir()])
+    if category:
+        folders = [f for f in folders if f.name == category]
+        if not folders:
+            raise HTTPException(status_code=404, detail={
+                "error": {"code": "CATEGORY_NOT_FOUND", "message": f"'{category}' 폴더를 찾을 수 없습니다", "status": 404}
+            })
+
+    results = {"queued": [], "skipped": [], "errors": []}
+
+    for folder in folders:
+        files = [
+            f for f in sorted(folder.iterdir())
+            if f.is_file() and f.suffix.lstrip(".").lower() in ALLOWED_EXTS
+        ]
+        if not files:
+            continue
+
+        with get_db() as (conn, cur):
+            cat_id = _get_or_create_category(cur, folder.name)
+
+        for file_path in files:
+            try:
+                if force:
+                    # force: 기존 레코드 삭제 후 재등록
+                    with get_db() as (conn, cur):
+                        cur.execute(
+                            "DELETE FROM documents WHERE filename = %s AND category_id = %s",
+                            (file_path.name, cat_id),
+                        )
+
+                status = _import_single(file_path, cat_id, background_tasks)
+                results[status].append(f"{folder.name}/{file_path.name}")
+            except Exception as e:
+                results["errors"].append({"file": f"{folder.name}/{file_path.name}", "error": str(e)})
 
     return {
-        "query":   req.query,
-        "count":   len(chunks),
-        "chunks":  chunks,
-        "context": format_context(chunks),   # LLM 프롬프트 주입용
+        "message": f"Import 시작: {len(results['queued'])}개 처리 중, {len(results['skipped'])}개 스킵",
+        "queued":  results["queued"],
+        "skipped": results["skipped"],
+        "errors":  results["errors"],
     }
