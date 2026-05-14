@@ -33,6 +33,7 @@ services:
     volumes:
       - ./backend:/app                     # 코드 변경 즉시 반영 (--reload)
       - upload_data:/app/storage/uploads   # 업로드 파일 영구 보존
+      - ./dataset:/app/dataset:ro          # 배치 import용 데이터셋 (읽기 전용)
     ports:
       - "8000:8000"
     depends_on:
@@ -43,19 +44,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-
-  # ── React 프론트엔드 ───────────────────────────────────────────────────────
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: rag_frontend
-    restart: unless-stopped
-    ports:
-      - "3000:80"
-    depends_on:
-      backend:
-        condition: service_healthy
 
 volumes:
   postgres_data:   # DB 데이터 영구 보존
