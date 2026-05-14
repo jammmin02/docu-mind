@@ -8,6 +8,8 @@ import ChatPage from './pages/ChatPage'
 import ReportsPage from './pages/ReportsPage'
 import CompanyInfoPage from './pages/CompanyInfoPage'
 import TemplatesPage from './pages/TemplatesPage'
+import DocumentDetailPage from './pages/admin/DocumentDetailPage'
+import SearchDebugPage from './pages/admin/SearchDebugPage'
 
 /** 로그인 후 역할에 따라 기본 페이지 분기 */
 function RootRedirect() {
@@ -49,6 +51,26 @@ export default function App() {
           element={
             <AdminRoute>
               <TemplatesPage />
+            </AdminRoute>
+          }
+        />
+
+        {/* admin 전용 — 문서 상세 */}
+        <Route
+          path="/documents/:docId"
+          element={
+            <AdminRoute>
+              <DocumentDetailPage />
+            </AdminRoute>
+          }
+        />
+
+        {/* admin 전용 — 검색 디버그 */}
+        <Route
+          path="/debug/search"
+          element={
+            <AdminRoute>
+              <SearchDebugPage />
             </AdminRoute>
           }
         />
