@@ -13,6 +13,11 @@ export const documentsApi = {
     return api.get(`/documents/${id}`)
   },
 
+  /** 문서 상세 (alias — DocumentDetailPage에서 사용) */
+  getById(id) {
+    return api.get(`/documents/${id}`)
+  },
+
   /** 파일 업로드 (categoryId 옵션) */
   async upload(file, onProgress, categoryId) {
     const formData = new FormData()
@@ -49,5 +54,19 @@ export const documentsApi = {
   /** 실패 문서 재처리 */
   reprocess(id) {
     return api.post(`/documents/${id}/reprocess`, {})
+  },
+
+  /**
+   * dataset/ 폴더 일괄 import
+   * @param {Object} options
+   * @param {boolean} options.force    - 이미 등록된 파일도 재처리
+   * @param {string}  options.category - 특정 카테고리 폴더명만 처리
+   */
+  importDataset({ force = false, category = null } = {}) {
+    const params = new URLSearchParams()
+    if (force)    params.set('force', 'true')
+    if (category) params.set('category', category)
+    const qs = params.toString() ? `?${params.toString()}` : ''
+    return api.post(`/documents/import-dataset${qs}`)
   },
 }

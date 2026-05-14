@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Badge } from '../ui/Badge'
 import { Button } from '../ui/Button'
 import { formatFileSize, formatRelativeTime, fileExtension } from '../../utils/formatters'
@@ -30,7 +31,8 @@ const EXT_COLOR = {
 const SHOW_ERROR_STATUS = new Set(['failed', 'timeout'])
 
 export function DocumentCard({ doc, onDelete, onReprocess, categories = [] }) {
-  const ext = fileExtension(doc.filename)
+  const ext      = fileExtension(doc.filename)
+  const navigate = useNavigate()
   const [errorExpanded, setErrorExpanded] = useState(false)
   const category = categories.find((c) => c.id === doc.category_id) ?? null
 
@@ -109,6 +111,16 @@ export function DocumentCard({ doc, onDelete, onReprocess, categories = [] }) {
 
       {/* 액션 버튼 */}
       <div className="flex items-center gap-1 shrink-0">
+
+        {/* 상세보기 */}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => navigate(`/documents/${doc.id}`)}
+          className="text-blue-500 hover:text-blue-700 hover:bg-blue-50"
+        >
+          상세보기
+        </Button>
 
         {/* 재시도: failed / timeout 상태에서만 */}
         {(doc.status === 'failed' || doc.status === 'timeout') && (

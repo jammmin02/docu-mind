@@ -2,10 +2,11 @@ import { create } from 'zustand'
 
 const useDocumentStore = create((set, get) => ({
   documents: [],
+  isLoaded: false,        // 최초 전체 로드 완료 여부
   isUploading: false,
   uploadProgress: {},   // { [tempId]: 0~100 }
 
-  setDocuments: (docs) => set({ documents: docs }),
+  setDocuments: (docs) => set({ documents: docs, isLoaded: true }),
 
   addDocument: (doc) =>
     set((s) => ({ documents: [doc, ...s.documents] })),

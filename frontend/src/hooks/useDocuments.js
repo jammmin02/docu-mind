@@ -13,10 +13,14 @@ import { DOCUMENT_STATUS, POLL_INTERVALS, MAX_FILE_SIZE_MB } from '../utils/cons
  *   - TIMEOUT_MS(5분) 초과 → status='timeout'으로 변경
  *   - 연속 3회 네트워크 오류 → status='failed'로 변경
  *   - 언마운트 시 모든 타이머 정리
+ *
+ * NOTE: 항상 전체 문서를 로드합니다 (categoryId 파라미터는 API 호출에 사용하지 않음).
+ *       카테고리 필터링은 호출 측에서 반환된 documents 배열을 메모리에서 필터링하세요.
+ *       이렇게 해야 documentStore가 전역적으로 일관된 전체 목록을 유지합니다.
  */
-export function useDocuments(categoryId = null) {
+export function useDocuments() {
   const {
-    documents, isUploading, uploadProgress,
+    documents, isLoaded, isUploading, uploadProgress,
     setDocuments, addDocument, updateDocument, removeDocument,
     setUploading, setUploadProgress, clearUploadProgress,
   } = useDocumentStore()
@@ -26,13 +30,15 @@ export function useDocuments(categoryId = null) {
   // { [docId]: { timer: TimeoutId | null, startTime: number, errorCount: number } }
   const pollState = useRef({})
 
-  // ── 최초 목록 로드 (categoryId 변경 시 재로드) ──────────────────────────────
+  // ── 최초 목록 로드 (전체 문서) ─────────────────────────────────────────────
+  // isLoaded가 true이면 이미 다른 컴포넌트에서 로드했으므로 재요청하지 않음
   useEffect(() => {
+    if (isLoaded) return
     setLoadError(null)
-    documentsApi.list(categoryId)
+    documentsApi.list(null)
       .then(setDocuments)
       .catch((e) => setLoadError(e.message ?? '문서 목록을 불러오지 못했습니다'))
-  }, [setDocuments, categoryId])
+  }, [setDocuments, isLoaded])
 
   // ── 언마운트 시 모든 타이머 정리 ────────────────────────────────────────────
   useEffect(() => {
@@ -150,9 +156,14 @@ export function useDocuments(categoryId = null) {
 
   // ── 삭제 ──────────────────────────────────────────────────────────────────
   const deleteDocument = useCallback(async (id) => {
-    await documentsApi.delete(id)
-    stopPolling(id)
-    removeDocument(id)
+    try {
+      await documentsApi.delete(id)
+    } finally {
+      // 성공·실패 모두 UI에서 제거 + 폴링 중단
+      // (실패 시에도 DB 레코드는 이미 삭제됐을 가능성이 높으므로 UI 동기화)
+      stopPolling(id)
+      removeDocument(id)
+    }
   }, [removeDocument, stopPolling])
 
   // ── 재처리 ────────────────────────────────────────────────────────────────
@@ -162,7 +173,18 @@ export function useDocuments(categoryId = null) {
     startPolling(id)
   }, [updateDocument, startPolling])
 
-  return { documents, isUploading, uploadProgress, loadError, upload, deleteDocument, reprocess }
+  /** 강제 재로드 (import 등 외부에서 대량 변경 후 호출) */
+  const refreshDocuments = useCallback(async () => {
+    setLoadError(null)
+    try {
+      const docs = await documentsApi.list(null)
+      setDocuments(docs)
+    } catch (e) {
+      setLoadError(e.message ?? '문서 목록을 불러오지 못했습니다')
+    }
+  }, [setDocuments])
+
+  return { documents, isUploading, uploadProgress, loadError, upload, deleteDocument, reprocess, refreshDocuments }
 }
 
 /** 경과 시간(ms)에 따른 적응형 폴링 간격 */
