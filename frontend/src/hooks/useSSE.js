@@ -8,6 +8,11 @@ export function useSSE({ onToken, onDone, onError }) {
   const readerRef = useRef(null)
 
   const start = useCallback(async (fetchFn) => {
+    // [Fix 1] sources 이벤트를 별도로 캡처한 뒤 done 시점에 전달
+    let capturedSources = []
+    // [Fix 3] done 이벤트 수신 여부 추적
+    let doneReceived = false
+
     try {
       const res = await fetchFn()
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -32,13 +37,25 @@ export function useSSE({ onToken, onDone, onError }) {
 
           try {
             const payload = JSON.parse(raw)
-            if (payload.type === 'token') onToken?.(payload.content)
-            if (payload.type === 'done')  onDone?.(payload)
+            // [Fix 1] sources 이벤트: 별도 캡처 (done 때 함께 전달)
+            if (payload.type === 'sources') capturedSources = payload.sources ?? []
+            if (payload.type === 'token')   onToken?.(payload.content)
+            if (payload.type === 'done') {
+              doneReceived = true
+              // sources는 done 페이로드가 아닌 capturedSources에서 주입
+              onDone?.({ ...payload, sources: capturedSources })
+            }
             if (payload.type === 'error') onError?.(new Error(payload.message))
           } catch {
             // JSON 파싱 실패 무시
           }
         }
+      }
+
+      // [Fix 3] done 이벤트 없이 스트림이 닫힌 경우 (네트워크 단절, abort 등)
+      // isStreaming이 영구 true로 남는 버그 방지
+      if (!doneReceived) {
+        onDone?.({ type: 'done', content: '', sources: capturedSources })
       }
     } catch (err) {
       onError?.(err)

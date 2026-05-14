@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { reportsApi } from '../api/reports'
 import useReportStore from '../store/reportStore'
 import { useSSE } from './useSSE'
@@ -12,6 +12,14 @@ export function useReports() {
 
   const [loadError,   setLoadError]   = useState(null)
   const [streamError, setStreamError] = useState(null)
+
+  // [Fix 4] 언마운트 시 interval 정리를 위한 ref
+  const pollTimerRef = useRef(null)
+  useEffect(() => {
+    return () => {
+      if (pollTimerRef.current != null) clearInterval(pollTimerRef.current)
+    }
+  }, [])
 
   useEffect(() => {
     setLoadError(null)
@@ -33,6 +41,7 @@ export function useReports() {
   })
 
   const pollFilePath = useCallback((reportId) => {
+    // [Fix 4] timer ID를 ref에 저장하여 언마운트 시 clearInterval 가능하게
     const timer = setInterval(async () => {
       try {
         const report = await reportsApi.get(reportId)
@@ -40,11 +49,14 @@ export function useReports() {
           updateReport(reportId, report)
           setCurrentReport(report)
           clearInterval(timer)
+          pollTimerRef.current = null
         }
       } catch {
         clearInterval(timer)
+        pollTimerRef.current = null
       }
     }, 3000)
+    pollTimerRef.current = timer
   }, [updateReport, setCurrentReport])
 
   const generateReport = useCallback(async ({ documentId, reportType, templateId }) => {

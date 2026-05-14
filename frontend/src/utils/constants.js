@@ -27,7 +27,7 @@ export const ACCEPTED_FILE_TYPES = [
   '.pdf', '.docx', '.txt', '.xlsx', '.csv', '.pptx',
 ]
 
-export const MAX_FILE_SIZE_MB = 10
+export const MAX_FILE_SIZE_MB = 50
 
 export const POLL_INTERVALS = {
   FAST: 2000,
