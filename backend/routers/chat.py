@@ -24,6 +24,7 @@ class ChatRequest(BaseModel):
     session_id:   str
     query:        str
     document_ids: Optional[List[int]] = None   # None이면 전체 문서 검색
+    category_id:  Optional[int]       = None   # 카테고리 지정 시 해당 문서만 검색
     top_k:        int   = 5
     score_cutoff: float = 0.3
 
@@ -131,13 +132,28 @@ async def chat(request: Request, req: ChatRequest, current_user: dict = Depends(
     if history and history[-1]["role"] == "user":
         history = history[:-1]
 
-    # ── 3. 벡터 검색 ─────────────────────────────────────────────────────────
+    # ── 3. category_id → document_ids 해석 ──────────────────────────────────
+    document_ids = req.document_ids
+    if document_ids is None and req.category_id is not None:
+        try:
+            with get_db() as (conn, cur):
+                cur.execute(
+                    "SELECT id FROM documents WHERE category_id = %s AND status = 'ready'",
+                    (req.category_id,)
+                )
+                rows = cur.fetchall()
+                document_ids = [r["id"] for r in rows] if rows else [-1]  # 빈 결과면 검색 막기
+                logger.info(f"[chat] category_id={req.category_id} → {len(rows)} docs")
+        except Exception as e:
+            logger.error(f"[chat] category resolve error: {e}")
+
+    # ── 4. 벡터 검색 ─────────────────────────────────────────────────────────
     try:
         chunks = search_chunks(
             query=req.query,
             top_k=req.top_k,
             score_cutoff=req.score_cutoff,
-            document_ids=req.document_ids,
+            document_ids=document_ids,
         )
         context = format_context(chunks)
         sources = [
@@ -145,6 +161,7 @@ async def chat(request: Request, req: ChatRequest, current_user: dict = Depends(
                 "filename":    c["filename"],
                 "chunk_index": c["chunk_index"],
                 "score":       c["score"],
+                "metadata":    c.get("metadata") or {},
             }
             for c in chunks
         ]
@@ -154,7 +171,7 @@ async def chat(request: Request, req: ChatRequest, current_user: dict = Depends(
         context = ""
         sources = []
 
-    # ── 4. SSE 스트리밍 ───────────────────────────────────────────────────────
+    # ── 5. SSE 스트리밍 ───────────────────────────────────────────────────────
     async def event_stream():
         full_reply = []
 
@@ -175,7 +192,7 @@ async def chat(request: Request, req: ChatRequest, current_user: dict = Depends(
             yield sse({"type": "error", "message": "응답 생성 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."})
 
         finally:
-            # ── 5. 어시스턴트 메시지 저장 ─────────────────────────────────────
+            # ── 6. 어시스턴트 메시지 저장 ─────────────────────────────────────
             reply_text = "".join(full_reply)
             if reply_text:
                 try:
