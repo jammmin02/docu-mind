@@ -14,18 +14,19 @@ from dotenv import load_dotenv
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+# AsyncAnthropic 사용 - 동기 클라이언트는 async 컨텍스트에서
+# 이벤트 루프를 블록하므로 반드시 비동기 클라이언트로 교체
+client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
-# ── 토큰 버짓 설정 ─────────────────────────────────────────────────────────────
-MODEL            = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5")
+# -- 토큰 버짓 설정 --
+MODEL             = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5")
 MAX_OUTPUT_TOKENS = 1500
 
-# 입력 토큰 버짓 (합계가 이 값을 넘지 않도록 히스토리를 트리밍)
-BUDGET_TOTAL    = 8000   # 전체 입력 토큰 한도
-BUDGET_SYSTEM   = 400    # 시스템 프롬프트 (고정)
-BUDGET_CONTEXT  = 2000   # RAG 컨텍스트
-BUDGET_HISTORY  = 3000   # 대화 히스토리
-BUDGET_QUERY    = 400    # 현재 질문
+BUDGET_TOTAL   = 8000
+BUDGET_SYSTEM  = 400
+BUDGET_CONTEXT = 2000
+BUDGET_HISTORY = 3000
+BUDGET_QUERY   = 400
 
 SYSTEM_PROMPT = """당신은 업로드된 문서를 기반으로 정확한 답변을 제공하는 전문 AI 어시스턴트입니다.
 
@@ -38,7 +39,7 @@ SYSTEM_PROMPT = """당신은 업로드된 문서를 기반으로 정확한 답�
 
 
 def estimate_tokens(text: str) -> int:
-    """간단한 토큰 수 추정 (한국어: 3자≈1토큰, 영어: 4자≈1토큰)"""
+    """간단한 토큰 수 추정 (한국어: 3자=1토큰, 영어: 4자=1토큰)"""
     korean_chars = sum(1 for c in text if '가' <= c <= '힣')
     other_chars  = len(text) - korean_chars
     return max(1, korean_chars // 3 + other_chars // 4)
@@ -55,10 +56,9 @@ def trim_history(
     if not history:
         return []
 
-    # 최신 메시지부터 역순으로 쌓다가 예산 초과 시 중단
     used  = 0
     kept  = []
-    pairs = list(zip(history[::2], history[1::2]))  # (user, assistant) 쌍
+    pairs = list(zip(history[::2], history[1::2]))
 
     for user_msg, asst_msg in reversed(pairs):
         cost = estimate_tokens(user_msg["content"]) + estimate_tokens(asst_msg["content"])
@@ -68,7 +68,7 @@ def trim_history(
         kept.insert(1, asst_msg)
         used += cost
 
-    logger.debug(f"[llm] history trimmed: {len(history)} → {len(kept)} msgs (~{used} tokens)")
+    logger.debug("[llm] history trimmed: %d -> %d msgs (~%d tokens)", len(history), len(kept), used)
     return kept
 
 
@@ -82,12 +82,30 @@ def build_messages(
     [히스토리...] + [현재 질문(컨텍스트 포함)]
     """
     trimmed = trim_history(history)
-
-    # 현재 질문에 RAG 컨텍스트 첨부
-    user_content = f"[참고 문서]\n{context}\n\n[질문]\n{query}" if context.strip() else query
-
+    user_content = ("[참고 문서]\n" + context + "\n\n[질문]\n" + query) if context.strip() else query
     messages = trimmed + [{"role": "user", "content": user_content}]
     return messages
+
+
+async def call_llm_once(
+    query: str,
+    context: str,
+    history: List[Dict[str, str]],
+) -> str:
+    """
+    Claude API 단건 호출 (스트리밍 없음) - 디버그용.
+    전체 응답 텍스트를 반환합니다.
+    """
+    messages = build_messages(query, context, history)
+    logger.info("[llm] call_once model=%s msgs=%d", MODEL, len(messages))
+
+    response = await client.messages.create(
+        model=MODEL,
+        max_tokens=MAX_OUTPUT_TOKENS,
+        system=SYSTEM_PROMPT,
+        messages=messages,
+    )
+    return response.content[0].text if response.content else ""
 
 
 async def stream_chat(
@@ -96,23 +114,22 @@ async def stream_chat(
     history: List[Dict[str, str]],
 ) -> AsyncGenerator[str, None]:
     """
-    Claude API 스트리밍 호출 → 토큰 단위 AsyncGenerator.
+    Claude API 스트리밍 호출 -> 토큰 단위 AsyncGenerator.
 
     Yields:
-        텍스트 토큰 문자열 (빈 문자열이면 스트림 종료)
+        텍스트 토큰 문자열
     """
     messages = build_messages(query, context, history)
-
-    logger.info(f"[llm] streaming model={MODEL} msgs={len(messages)}")
+    logger.info("[llm] streaming model=%s msgs=%d", MODEL, len(messages))
 
     try:
-        with client.messages.stream(
+        async with client.messages.stream(
             model=MODEL,
             max_tokens=MAX_OUTPUT_TOKENS,
             system=SYSTEM_PROMPT,
             messages=messages,
         ) as stream:
-            for text in stream.text_stream:
+            async for text in stream.text_stream:
                 yield text
 
     except anthropic.RateLimitError:
@@ -128,5 +145,5 @@ async def stream_chat(
         yield "\n\n[오류: Claude API 연결에 실패했습니다.]"
 
     except Exception as e:
-        logger.error(f"[llm] unexpected error: {e}")
-        yield f"\n\n[오류: {str(e)[:100]}]"
+        logger.error("[llm] unexpected error: %s", e)
+        yield "\n\n[오류: " + str(e)[:100] + "]"

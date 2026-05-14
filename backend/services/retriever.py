@@ -1,9 +1,12 @@
 """
 RAG 벡터 검색 서비스
 쿼리 임베딩 → pgvector cosine 유사도 검색 → 상위 K개 청크 반환
+
+검색 결과에 chunks.metadata (page_number, has_table, section, ocr_applied) 포함.
+format_context()에서 페이지 번호 / 표 여부를 출처 헤더에 표시.
 """
 import logging
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
 from pgvector.psycopg import register_vector
 
@@ -12,9 +15,8 @@ from services.embedder import embed_query
 
 logger = logging.getLogger(__name__)
 
-# 기본 검색 파라미터
-DEFAULT_TOP_K        = int(5)   # 반환할 청크 수
-DEFAULT_SCORE_CUTOFF = 0.3      # 최소 유사도 (0~1, cosine distance 기준)
+DEFAULT_TOP_K        = 5
+DEFAULT_SCORE_CUTOFF = 0.3
 
 
 def search_chunks(
@@ -26,12 +28,6 @@ def search_chunks(
     """
     자연어 쿼리를 임베딩 → pgvector cosine 유사도 검색.
 
-    Args:
-        query:        검색할 자연어 질문
-        top_k:        반환할 최대 청크 수
-        score_cutoff: 이 값 미만 유사도 청크는 제외 (0=전체 허용, 1=완전일치만)
-        document_ids: 특정 문서 ID만 검색 (None이면 전체 검색)
-
     Returns:
         [
           {
@@ -40,28 +36,27 @@ def search_chunks(
             "filename":    str,
             "content":     str,
             "chunk_index": int,
-            "score":       float,   # 유사도 (높을수록 관련성 높음)
+            "score":       float,
+            "metadata":    dict,   ← page_number, has_table, section, ocr_applied
           }, ...
         ]
     """
-    logger.info(f"[retriever] query='{query[:50]}' top_k={top_k}")
+    logger.info("[retriever] query='%s' top_k=%d", query[:50], top_k)
 
-    # 1. 쿼리 임베딩
     query_embedding = embed_query(query)
 
-    # 2. pgvector 유사도 검색
     with get_db() as (conn, cur):
         register_vector(conn)
 
         if document_ids:
-            # 특정 문서 범위 내 검색
             cur.execute("""
                 SELECT
-                    c.id          AS chunk_id,
+                    c.id            AS chunk_id,
                     c.document_id,
                     d.filename,
                     c.content,
                     c.chunk_index,
+                    c.metadata,
                     1 - (c.embedding <=> %s::vector) AS score
                 FROM chunks c
                 JOIN documents d ON d.id = c.document_id
@@ -71,14 +66,14 @@ def search_chunks(
                 LIMIT %s
             """, (query_embedding, document_ids, query_embedding, top_k * 2))
         else:
-            # 전체 검색
             cur.execute("""
                 SELECT
-                    c.id          AS chunk_id,
+                    c.id            AS chunk_id,
                     c.document_id,
                     d.filename,
                     c.content,
                     c.chunk_index,
+                    c.metadata,
                     1 - (c.embedding <=> %s::vector) AS score
                 FROM chunks c
                 JOIN documents d ON d.id = c.document_id
@@ -89,7 +84,6 @@ def search_chunks(
 
         rows = cur.fetchall()
 
-    # 3. score_cutoff 필터링 + top_k 자르기
     results = [
         {
             "chunk_id":    row["chunk_id"],
@@ -98,24 +92,25 @@ def search_chunks(
             "content":     row["content"],
             "chunk_index": row["chunk_index"],
             "score":       round(float(row["score"]), 4),
+            "metadata":    row["metadata"] if row["metadata"] else {},
         }
         for row in rows
         if float(row["score"]) >= score_cutoff
     ][:top_k]
 
-    logger.info(f"[retriever] found {len(results)} chunks (cutoff={score_cutoff})")
+    logger.info("[retriever] found %d chunks (cutoff=%.2f)", len(results), score_cutoff)
     return results
 
 
 def format_context(chunks: List[Dict[str, Any]]) -> str:
     """
-    검색된 청크를 LLM 프롬프트에 삽입할 컨텍스트 문자열로 변환.
+    검색된 청크를 LLM 프롬프트용 컨텍스트 문자열로 변환.
 
-    출력 형태:
-        [출처: 파일명.pdf | 청크 3]
+    출력 예시:
+        [출처: 보고서.pdf | p.3 | 표 포함]
         청크 내용 ...
 
-        [출처: 파일명2.docx | 청크 7]
+        [출처: 회의록.docx | 청크 7]
         청크 내용 ...
     """
     if not chunks:
@@ -123,7 +118,21 @@ def format_context(chunks: List[Dict[str, Any]]) -> str:
 
     parts = []
     for chunk in chunks:
-        header = f"[출처: {chunk['filename']} | 청크 {chunk['chunk_index']}]"
+        meta        = chunk.get("metadata") or {}
+        page_num    = meta.get("page_number")
+        has_table   = meta.get("has_table", False)
+        section     = meta.get("section")
+
+        # 출처 헤더 구성
+        header_parts = [f"출처: {chunk['filename']}"]
+        if page_num is not None:
+            header_parts.append(f"p.{page_num}")
+        if section:
+            header_parts.append(f"섹션: {section}")
+        if has_table:
+            header_parts.append("표 포함")
+
+        header = "[" + " | ".join(header_parts) + "]"
         parts.append(f"{header}\n{chunk['content']}")
 
     return "\n\n".join(parts)
