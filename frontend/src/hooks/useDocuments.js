@@ -3,6 +3,9 @@ import { documentsApi } from '../api/documents'
 import useDocumentStore from '../store/documentStore'
 import { DOCUMENT_STATUS, POLL_INTERVALS, MAX_FILE_SIZE_MB } from '../utils/constants'
 
+/** 폴링을 유지해야 하는 모든 "작업 중" 상태 */
+const BUSY_STATUSES = new Set(['processing', 'reparsing', 'rechunking', 'reembedding'])
+
 /**
  * 문서 목록 + 업로드 + 폴링 훅
  *
@@ -92,7 +95,7 @@ export function useDocuments() {
 
         updateDocument(docId, updated)
 
-        if (updated.status !== DOCUMENT_STATUS.PROCESSING) {
+        if (!BUSY_STATUSES.has(updated.status)) {
           stopPolling(docId)  // 완료/실패/타임아웃 — 폴링 종료
           return
         }
@@ -124,10 +127,10 @@ export function useDocuments() {
     pollState.current[docId].timer = setTimeout(tick, POLL_INTERVALS.FAST)
   }, [updateDocument, stopPolling])
 
-  // ── processing 문서는 자동으로 폴링 시작 ────────────────────────────────────
+  // ── 작업 중(processing/reparsing/rechunking/reembedding) 문서는 자동으로 폴링 시작 ──
   useEffect(() => {
     documents.forEach((doc) => {
-      if (doc.status === DOCUMENT_STATUS.PROCESSING && !pollState.current[doc.id]) {
+      if (BUSY_STATUSES.has(doc.status) && !pollState.current[doc.id]) {
         startPolling(doc.id)
       }
     })

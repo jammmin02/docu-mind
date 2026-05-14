@@ -128,6 +128,13 @@ export function CategoryPanel({
 function CategoryItem({ cat, isSelected, isDeleting, onSelect, onEdit, onDelete }) {
   const [hovered, setHovered] = useState(false)
 
+  // chunk_config가 설정된 경우 툴팁 텍스트 생성
+  const chunkConfigTooltip = cat.chunk_config
+    ? Object.entries(cat.chunk_config)
+        .map(([k, v]) => `${k}: ${v}`)
+        .join(', ')
+    : null
+
   return (
     <div
       className={clsx(
@@ -152,9 +159,28 @@ function CategoryItem({ cat, isSelected, isDeleting, onSelect, onEdit, onDelete 
         {cat.name}
       </span>
 
+      {/* chunk_config 설정 아이콘 (호버 전에도 표시) */}
+      {chunkConfigTooltip && !hovered && !isSelected && (
+        <span
+          className="text-xs text-indigo-400 shrink-0"
+          title={'커스텀 청크 설정\n' + chunkConfigTooltip}
+        >
+          ⚙
+        </span>
+      )}
+
       {/* 문서 수 / 액션 버튼 */}
       {hovered || isSelected ? (
         <div className="flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+          {/* chunk_config 설정 아이콘 (호버 시) */}
+          {chunkConfigTooltip && (
+            <span
+              className="w-5 h-5 flex items-center justify-center text-xs text-indigo-400 cursor-default"
+              title={'커스텀 청크 설정\n' + chunkConfigTooltip}
+            >
+              ⚙
+            </span>
+          )}
           <button
             onClick={onEdit}
             className="w-5 h-5 flex items-center justify-center rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200 text-xs transition-colors"

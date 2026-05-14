@@ -5,18 +5,26 @@ import { Button } from '../ui/Button'
 import { formatFileSize, formatRelativeTime, fileExtension } from '../../utils/formatters'
 
 const STATUS_VARIANT = {
-  processing: 'processing',
-  ready:      'success',
-  failed:     'danger',
-  timeout:    'warning',
+  processing:  'processing',
+  reparsing:   'processing',
+  rechunking:  'processing',
+  reembedding: 'processing',
+  ready:       'success',
+  failed:      'danger',
+  timeout:     'warning',
 }
 
 const STATUS_LABEL = {
-  processing: '처리 중',
-  ready:      '완료',
-  failed:     '실패',
-  timeout:    '시간 초과',
+  processing:  '처리 중',
+  reparsing:   '재파싱 중',
+  rechunking:  '재청킹 중',
+  reembedding: '재임베딩 중',
+  ready:       '완료',
+  failed:      '실패',
+  timeout:     '시간 초과',
 }
+
+const BUSY_STATUSES = new Set(['processing', 'reparsing', 'rechunking', 'reembedding'])
 
 const EXT_COLOR = {
   pdf:  'bg-red-100 text-red-600',
@@ -36,7 +44,7 @@ export function DocumentCard({ doc, onDelete, onReprocess, categories = [] }) {
   const [errorExpanded, setErrorExpanded] = useState(false)
   const category = categories.find((c) => c.id === doc.category_id) ?? null
 
-  const isProcessing = doc.status === 'processing'
+  const isProcessing = BUSY_STATUSES.has(doc.status)
   const hasError     = SHOW_ERROR_STATUS.has(doc.status) && doc.error_message
   const isLongError  = hasError && doc.error_message.length > 80
 
@@ -87,7 +95,10 @@ export function DocumentCard({ doc, onDelete, onReprocess, categories = [] }) {
         {/* 처리 중 안내 */}
         {isProcessing && (
           <p className="text-xs text-blue-400 mt-1.5">
-            텍스트 추출 및 AI 임베딩 처리 중입니다. 잠시 기다려 주세요...
+            {doc.status === 'reparsing'   ? '원본 파일 재파싱 중입니다...'
+            : doc.status === 'rechunking'  ? '청크 재분할 및 임베딩 중입니다...'
+            : doc.status === 'reembedding' ? '벡터 임베딩 재생성 중입니다...'
+            : '텍스트 추출 및 AI 임베딩 처리 중입니다. 잠시 기다려 주세요...'}
           </p>
         )}
 

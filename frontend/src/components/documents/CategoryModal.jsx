@@ -1,15 +1,10 @@
 import { useState, useEffect } from 'react'
 import { Button } from '../ui/Button'
+import { ChunkConfigEditor } from '../admin/ChunkConfigEditor'
 
 const PRESET_COLORS = [
-  '#6366f1', // indigo
-  '#0ea5e9', // sky
-  '#10b981', // emerald
-  '#f59e0b', // amber
-  '#ef4444', // red
-  '#8b5cf6', // violet
-  '#ec4899', // pink
-  '#14b8a6', // teal
+  '#6366f1', '#0ea5e9', '#10b981', '#f59e0b',
+  '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6',
 ]
 
 /**
@@ -22,13 +17,13 @@ const PRESET_COLORS = [
  *  onClose     - () => void
  */
 export function CategoryModal({ mode = 'create', initial, onConfirm, onClose }) {
-  const [name, setName] = useState(initial?.name ?? '')
+  const [name,        setName]        = useState(initial?.name        ?? '')
   const [description, setDescription] = useState(initial?.description ?? '')
-  const [color, setColor] = useState(initial?.color ?? '#6366f1')
-  const [submitting, setSubmitting] = useState(false)
-  const [error, setError] = useState(null)
+  const [color,       setColor]       = useState(initial?.color       ?? '#6366f1')
+  const [chunkConfig, setChunkConfig] = useState(initial?.chunk_config ?? null)
+  const [submitting,  setSubmitting]  = useState(false)
+  const [error,       setError]       = useState(null)
 
-  // ESC 키로 닫기
   useEffect(() => {
     const handler = (e) => { if (e.key === 'Escape') onClose() }
     window.addEventListener('keydown', handler)
@@ -41,7 +36,12 @@ export function CategoryModal({ mode = 'create', initial, onConfirm, onClose }) 
     try {
       setSubmitting(true)
       setError(null)
-      await onConfirm({ name: name.trim(), description: description.trim() || null, color })
+      await onConfirm({
+        name: name.trim(),
+        description: description.trim() || null,
+        color,
+        chunk_config: chunkConfig,
+      })
       onClose()
     } catch (err) {
       setError(err.message ?? '처리 중 오류가 발생했습니다.')
@@ -51,12 +51,11 @@ export function CategoryModal({ mode = 'create', initial, onConfirm, onClose }) 
   }
 
   return (
-    /* backdrop */
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
       onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md mx-4 p-6">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg mx-4 p-6 max-h-[90vh] overflow-y-auto scrollbar-thin">
 
         {/* 헤더 */}
         <div className="flex items-center justify-between mb-5">
@@ -110,11 +109,14 @@ export function CategoryModal({ mode = 'create', initial, onConfirm, onClose }) 
                   type="button"
                   onClick={() => setColor(c)}
                   className="w-7 h-7 rounded-full transition-transform hover:scale-110 focus:outline-none"
-                  style={{ backgroundColor: c, outline: color === c ? `3px solid ${c}` : 'none', outlineOffset: '2px' }}
+                  style={{
+                    backgroundColor: c,
+                    outline: color === c ? '3px solid ' + c : 'none',
+                    outlineOffset: '2px',
+                  }}
                   title={c}
                 />
               ))}
-              {/* 직접 입력 */}
               <div className="flex items-center gap-1.5 ml-auto">
                 <span className="text-xs text-slate-400">직접 입력</span>
                 <input
@@ -129,13 +131,20 @@ export function CategoryModal({ mode = 'create', initial, onConfirm, onClose }) 
 
           {/* 미리보기 */}
           <div className="flex items-center gap-2 bg-slate-50 rounded-lg px-3 py-2">
-            <span
-              className="w-3 h-3 rounded-full shrink-0"
-              style={{ backgroundColor: color }}
-            />
+            <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: color }} />
             <span className="text-sm text-slate-700 font-medium truncate">
               {name || '카테고리 이름 미리보기'}
             </span>
+          </div>
+
+          {/* 청킹 파라미터 */}
+          <div className="border border-slate-200 rounded-xl p-4">
+            <p className="text-xs font-medium text-slate-600 mb-3">청킹 파라미터</p>
+            <ChunkConfigEditor
+              value={chunkConfig}
+              onChange={setChunkConfig}
+              disabled={submitting}
+            />
           </div>
 
           {/* 에러 */}
