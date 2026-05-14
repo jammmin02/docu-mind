@@ -6,7 +6,7 @@ const useChatStore = create((set) => ({
   messages: [],
   isStreaming: false,
   streamingText: '',
-  selectedDocIds: [],
+  selectedCategoryId: null,   // null = 전체 문서 검색
 
   setSessions: (sessions) => set({ sessions }),
 
@@ -51,7 +51,7 @@ const useChatStore = create((set) => ({
 
   resetStreaming: () => set({ streamingText: '', isStreaming: false }),
 
-  setSelectedDocIds: (ids) => set({ selectedDocIds: ids }),
+  setSelectedCategoryId: (id) => set({ selectedCategoryId: id }),
 }))
 
 export default useChatStore

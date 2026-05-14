@@ -19,11 +19,16 @@ export const chatApi = {
 
   /**
    * 질문 전송 — SSE 스트리밍
-   * @returns EventSource
+   * categoryId: null이면 전체 검색, 숫자면 해당 카테고리 문서만 검색
+   * @returns fetch Response (ReadableStream)
    */
-  sendMessage({ sessionId, query, documentIds = [] }) {
+  sendMessage({ sessionId, query, categoryId = null }) {
     const url = new URL(`${API_BASE}/chat`)
-    const body = JSON.stringify({ session_id: sessionId, query, document_ids: documentIds })
+    const body = JSON.stringify({
+      session_id:  sessionId,
+      query,
+      category_id: categoryId,
+    })
 
     // SSE는 fetch + ReadableStream으로 처리 (POST body 필요)
     return fetch(url.toString(), {

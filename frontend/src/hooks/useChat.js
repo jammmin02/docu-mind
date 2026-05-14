@@ -1,16 +1,19 @@
 import { useEffect, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { chatApi } from '../api/chat'
 import useChatStore from '../store/chatStore'
 import { useSSE } from './useSSE'
 
 export function useChat() {
   const {
-    sessions, currentSession, messages, isStreaming, streamingText, selectedDocIds,
+    sessions, currentSession, messages, isStreaming, streamingText, selectedCategoryId,
     setSessions, addSession, updateSession, removeSession,
     setCurrentSession, setMessages, addMessage,
     setStreaming, appendStreamingText, commitStreamingText, resetStreaming,
-    setSelectedDocIds,
+    setSelectedCategoryId,
   } = useChatStore()
+
+  const navigate = useNavigate()
 
   // 세션 목록 로드
   useEffect(() => {
@@ -45,9 +48,9 @@ export function useChat() {
     setStreaming(true)
 
     await startSSE(() =>
-      chatApi.sendMessage({ sessionId, query, documentIds: selectedDocIds })
+      chatApi.sendMessage({ sessionId, query, categoryId: selectedCategoryId })
     )
-  }, [currentSession, isStreaming, selectedDocIds, addSession, setCurrentSession, addMessage, setStreaming, startSSE])
+  }, [currentSession, isStreaming, selectedCategoryId, addSession, setCurrentSession, addMessage, setStreaming, startSSE])
 
   const newSession = useCallback(() => {
     setCurrentSession(null)
@@ -59,9 +62,17 @@ export function useChat() {
     removeSession(sessionId)
   }, [removeSession])
 
+  /** 현재 채팅 세션을 기반으로 보고서 작성 페이지로 이동 */
+  const goToReport = useCallback(() => {
+    const params = new URLSearchParams()
+    if (currentSession) params.set('from_session', currentSession)
+    navigate(`/reports?${params.toString()}`)
+  }, [currentSession, navigate])
+
   return {
-    sessions, currentSession, messages, isStreaming, streamingText, selectedDocIds,
-    setCurrentSession, setSelectedDocIds,
+    sessions, currentSession, messages, isStreaming, streamingText, selectedCategoryId,
+    setCurrentSession, setSelectedCategoryId,
     sendMessage, newSession, deleteSession, abortSSE,
+    goToReport,
   }
 }
