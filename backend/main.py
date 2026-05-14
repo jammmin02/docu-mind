@@ -9,7 +9,7 @@ from slowapi.errors import RateLimitExceeded
 
 from db.database import check_db_connection, close_pool
 from limiter import limiter
-from routers import documents, chat, report, auth, categories, company, templates
+from routers import documents, chat, report, auth, categories, company, templates, admin
 
 load_dotenv()
 
@@ -63,6 +63,7 @@ app.include_router(templates.router)
 app.include_router(documents.router)
 app.include_router(chat.router)
 app.include_router(report.router)
+app.include_router(admin.router)
 
 
 # ── 헬스체크 ─────────────────────────────────────────────────────────────────
