@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS categories (
     name        TEXT NOT NULL UNIQUE,
     description TEXT,
     color       TEXT DEFAULT '#6366f1',  -- UI 표시용 hex 색상
+    chunk_config JSONB DEFAULT NULL,    -- 카테고리별 청킹 파라미터 (Phase 2)
     created_at  TIMESTAMP DEFAULT NOW(),
     updated_at  TIMESTAMP
 );
@@ -130,6 +131,19 @@ CREATE TABLE IF NOT EXISTS reports (
     created_at      TIMESTAMP DEFAULT NOW()
 );
 
+-- ── parsed_pages (페이지별 파싱 결과 — Phase 2) ───────────────────────────
+CREATE TABLE IF NOT EXISTS parsed_pages (
+    id          SERIAL PRIMARY KEY,
+    document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    page_number INTEGER NOT NULL,          -- 1-based
+    content     TEXT    NOT NULL DEFAULT '',
+    char_count  INTEGER,
+    has_table   BOOLEAN DEFAULT FALSE,
+    ocr_applied BOOLEAN DEFAULT FALSE,
+    created_at  TIMESTAMP DEFAULT NOW(),
+    UNIQUE (document_id, page_number)
+);
+
 -- ── 인덱스 ────────────────────────────────────────────────────────────────
 -- 주의: ivfflat은 데이터가 어느 정도 쌓인 후 생성 권장
 -- 개발 초기에는 hnsw 또는 기본 인덱스 없이 시작 가능
@@ -150,6 +164,9 @@ CREATE INDEX IF NOT EXISTS idx_documents_category_id
 
 CREATE INDEX IF NOT EXISTS idx_categories_name
     ON categories (name);
+
+CREATE INDEX IF NOT EXISTS idx_parsed_pages_document_id
+    ON parsed_pages (document_id);
 
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_user_id
     ON chat_sessions (user_id);
