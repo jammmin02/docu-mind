@@ -6,11 +6,12 @@ import { formatRelativeTime } from '../../utils/formatters'
 import { USER_ROLE } from '../../utils/constants'
 
 const ALL_NAV = [
-  { to: '/',          icon: '📄', label: 'Documents',   adminOnly: true  },
-  { to: '/company',   icon: '🏢', label: '회사 정보',    adminOnly: true  },
-  { to: '/templates', icon: '📋', label: '보고서 템플릿', adminOnly: true  },
-  { to: '/chat',      icon: '💬', label: 'Chat',         adminOnly: false },
-  { to: '/reports',   icon: '📊', label: 'Reports',      adminOnly: false },
+  { to: '/',             icon: '📄', label: 'Documents',   adminOnly: true  },
+  { to: '/company',      icon: '🏢', label: '회사 정보',    adminOnly: true  },
+  { to: '/templates',    icon: '📋', label: '보고서 템플릿', adminOnly: true  },
+  { to: '/debug/search', icon: '🔍', label: '검색 디버그',  adminOnly: true  },
+  { to: '/chat',         icon: '💬', label: 'Chat',         adminOnly: false },
+  { to: '/reports',      icon: '📊', label: 'Reports',      adminOnly: false },
 ]
 
 export function Sidebar() {
