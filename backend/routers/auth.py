@@ -135,7 +135,8 @@ def me(request: Request):
         )
 
     return {
-        "id":    payload["sub"],
+        # [Fix 2] sub는 str이므로 int로 변환 — dependencies.py의 get_current_user와 타입 통일
+        "id":    int(payload["sub"]),
         "email": payload["email"],
         "name":  payload["name"],
         "role":  payload["role"],
